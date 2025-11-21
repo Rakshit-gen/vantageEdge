@@ -7,11 +7,12 @@ dist/
 *.so
 *.dylib
 *.test
-control-plane
-gateway
-migrator
+# Binary executables (not directories)
+/control-plane
+/gateway
+/migrator
 
-# Go modules vendor dir
+# Go modules git avendor dir
 vendor/
 
 # IDE files
