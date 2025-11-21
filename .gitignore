@@ -1,0 +1,65 @@
+# Binaries
+bin/
+build/
+dist/
+*.exe
+*.dll
+*.so
+*.dylib
+*.test
+control-plane
+gateway
+migrator
+
+# Go modules vendor dir
+vendor/
+
+# IDE files
+.vscode/
+.idea/
+*.iml
+
+# Logs & Temp
+*.log
+*.out
+*.tmp
+tmp/
+*.pid
+
+# Coverage files
+coverage.out
+coverage.html
+
+# OS/system files
+.DS_Store
+Thumbs.db
+
+# Local environment files
+.env
+.env.local
+.env.*.local
+
+# Docker state
+docker-data/
+postgres-data/
+redis-data/
+
+# Go Swap files
+*.swp
+*.swo
+
+# Generated proto/gRPC files (if used)
+*.pb.go
+*.swagger.json
+
+# Code generation scripts (not needed in repo)
+generate_*.sh
+generate_all_code.sh
+generate_backend.sh
+generate_gateway.sh
+generate_remaining.sh
+generate_services.sh
+
+# Keep utility scripts
+# scripts/test-requests.sh (keep this - useful for testing)
+# docker/wait-for-it.sh (keep this - needed for Docker)

@@ -1,0 +1,210 @@
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: vantageedge-postgres
+    environment:
+      POSTGRES_USER: vantageedge
+      POSTGRES_PASSWORD: changeme_db_password
+      POSTGRES_DB: vantageedge
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./migrations:/docker-entrypoint-initdb.d
+    networks:
+      - vantageedge-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U vantageedge"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis Cache
+  redis:
+    image: redis:7-alpine
+    container_name: vantageedge-redis
+    command: redis-server --appendonly yes
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - vantageedge-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Database Migrator (runs once)
+  migrator:
+    build:
+      context: .
+      dockerfile: docker/migrator.Dockerfile
+    container_name: vantageedge-migrator
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: vantageedge
+      DB_PASSWORD: changeme_db_password
+      DB_NAME: vantageedge
+      DB_SSLMODE: disable
+      CLERK_SECRET_KEY: ${CLERK_SECRET_KEY}
+      CLERK_PUBLISHABLE_KEY: ${CLERK_PUBLISHABLE_KEY}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - vantageedge-network
+    command: ["./wait-for-it.sh", "postgres:5432", "--", "./migrator", "up"]
+
+  # Control Plane Service
+  control-plane:
+    build:
+      context: .
+      dockerfile: docker/control-plane.Dockerfile
+    container_name: vantageedge-control-plane
+    ports:
+      - "8080:8080"
+      - "9090:9090"
+      - "9091:9091"
+    environment:
+      APP_ENV: development
+      CONTROL_PLANE_HOST: 0.0.0.0
+      CONTROL_PLANE_PORT: 8080
+      CONTROL_PLANE_GRPC_PORT: 9090
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: vantageedge
+      DB_PASSWORD: changeme_db_password
+      DB_NAME: vantageedge
+      DB_SSLMODE: disable
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      CLERK_SECRET_KEY: ${CLERK_SECRET_KEY}
+      CLERK_PUBLISHABLE_KEY: ${CLERK_PUBLISHABLE_KEY}
+      LOG_LEVEL: info
+      METRICS_ENABLED: true
+      METRICS_PORT: 9091
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrator:
+        condition: service_completed_successfully
+    networks:
+      - vantageedge-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # API Gateway
+  gateway:
+    build:
+      context: .
+      dockerfile: docker/gateway.Dockerfile
+    container_name: vantageedge-gateway
+    ports:
+      - "8000:8000"
+      - "9092:9092"
+    environment:
+      APP_ENV: development
+      GATEWAY_HOST: 0.0.0.0
+      GATEWAY_PORT: 8000
+      GATEWAY_DOMAIN: vantageedge.dev
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: vantageedge
+      DB_PASSWORD: changeme_db_password
+      DB_NAME: vantageedge
+      DB_SSLMODE: disable
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      CLERK_SECRET_KEY: ${CLERK_SECRET_KEY}
+      CONTROL_PLANE_GRPC: control-plane:9090
+      LOG_LEVEL: info
+      RATE_LIMIT_ENABLED: true
+      CACHE_ENABLED: true
+      METRICS_ENABLED: true
+      METRICS_PORT: 9092
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      control-plane:
+        condition: service_healthy
+    networks:
+      - vantageedge-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # Jaeger (OpenTelemetry Tracing)
+  jaeger:
+    image: jaegertracing/all-in-one:1.52
+    container_name: vantageedge-jaeger
+    ports:
+      - "5775:5775/udp"
+      - "6831:6831/udp"
+      - "6832:6832/udp"
+      - "5778:5778"
+      - "16686:16686"
+      - "14268:14268"
+      - "14250:14250"
+      - "9411:9411"
+    environment:
+      COLLECTOR_OTLP_ENABLED: true
+    networks:
+      - vantageedge-network
+
+  # Prometheus (Metrics)
+  prometheus:
+    image: prom/prometheus:v2.48.1
+    container_name: vantageedge-prometheus
+    ports:
+      - "9093:9090"
+    volumes:
+      - ./docker/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+    networks:
+      - vantageedge-network
+
+  # Grafana (Visualization)
+  grafana:
+    image: grafana/grafana:10.2.3
+    container_name: vantageedge-grafana
+    ports:
+      - "3001:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_ALLOW_SIGN_UP: false
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./docker/grafana/dashboards:/etc/grafana/provisioning/dashboards
+      - ./docker/grafana/datasources:/etc/grafana/provisioning/datasources
+    depends_on:
+      - prometheus
+    networks:
+      - vantageedge-network
+
+networks:
+  vantageedge-network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  redis_data:
+  prometheus_data:
+  grafana_data:
