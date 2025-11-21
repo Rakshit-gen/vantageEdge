@@ -10,17 +10,17 @@ import (
 )
 
 type Config struct {
-	App          AppConfig
-	ControlPlane ControlPlaneConfig
-	Gateway      GatewayConfig
-	Database     DatabaseConfig
-	Redis        RedisConfig
-	Clerk        ClerkConfig
-	RateLimit    RateLimitConfig
-	Cache        CacheConfig
-	LoadBalancer LoadBalancerConfig
+	App           AppConfig
+	ControlPlane  ControlPlaneConfig
+	Gateway       GatewayConfig
+	Database      DatabaseConfig
+	Redis         RedisConfig
+	Clerk         ClerkConfig
+	RateLimit     RateLimitConfig
+	Cache         CacheConfig
+	LoadBalancer  LoadBalancerConfig
 	Observability ObservabilityConfig
-	CORS         CORSConfig
+	CORS          CORSConfig
 }
 
 type AppConfig struct {
@@ -68,8 +68,8 @@ type ClerkConfig struct {
 }
 
 type RateLimitConfig struct {
-	Enabled    bool
-	DefaultRPS int
+	Enabled      bool
+	DefaultRPS   int
 	DefaultBurst int
 }
 
@@ -87,13 +87,13 @@ type LoadBalancerConfig struct {
 }
 
 type ObservabilityConfig struct {
-	OTELEnabled         bool
-	OTELServiceName     string
+	OTELEnabled          bool
+	OTELServiceName      string
 	OTELExporterEndpoint string
-	MetricsEnabled      bool
-	MetricsPort         int
-	LogLevel            string
-	LogFormat           string
+	MetricsEnabled       bool
+	MetricsPort          int
+	LogLevel             string
+	LogFormat            string
 }
 
 type CORSConfig struct {
@@ -171,12 +171,23 @@ func Load() (*Config, error) {
 			LogLevel:             getEnv("LOG_LEVEL", "info"),
 			LogFormat:            getEnv("LOG_FORMAT", "json"),
 		},
-		CORS: CORSConfig{
-			AllowedOrigins:   getEnvAsSlice("CORS_ALLOWED_ORIGINS", []string{"http://localhost:3000"}),
-			AllowedMethods:   getEnvAsSlice("CORS_ALLOWED_METHODS", []string{"GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"}),
-			AllowedHeaders:   getEnvAsSlice("CORS_ALLOWED_HEADERS", []string{"Authorization", "Content-Type", "X-API-Key", "X-Tenant-ID"}),
-			AllowCredentials: getEnvAsBool("CORS_ALLOW_CREDENTIALS", true),
-		},
+		CORS: func() CORSConfig {
+			env := getEnv("APP_ENV", "development")
+			var defaultOrigins []string
+			if os.Getenv("CORS_ALLOWED_ORIGINS") != "" {
+				defaultOrigins = getEnvAsSlice("CORS_ALLOWED_ORIGINS", []string{})
+			} else if env == "production" {
+				defaultOrigins = []string{"*"}
+			} else {
+				defaultOrigins = []string{"http://localhost:3000", "https://vantageedge.vercel.app"}
+			}
+			return CORSConfig{
+				AllowedOrigins:   defaultOrigins,
+				AllowedMethods:   getEnvAsSlice("CORS_ALLOWED_METHODS", []string{"GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"}),
+				AllowedHeaders:   getEnvAsSlice("CORS_ALLOWED_HEADERS", []string{"Authorization", "Content-Type", "X-API-Key", "X-Tenant-ID"}),
+				AllowCredentials: getEnvAsBool("CORS_ALLOW_CREDENTIALS", true),
+			}
+		}(),
 	}
 
 	if err := cfg.Validate(); err != nil {
