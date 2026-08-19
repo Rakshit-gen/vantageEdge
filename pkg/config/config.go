@@ -211,13 +211,20 @@ func Load() (*Config, error) {
 		}(),
 	}
 
-	if err := cfg.Validate(); err != nil {
-		return nil, err
-	}
-
 	return cfg, nil
 }
 
+// Validate checks the fields required by the HTTP-facing services
+// (control-plane and gateway): Clerk/JWT verification, database, cache,
+// and (in production) CORS/secret hygiene.
+//
+// Load() previously called this unconditionally, which meant cmd/migrator
+// — a one-shot SQL runner with no use for Clerk credentials, JWT
+// verification, or CORS — failed to start without CLERK_SECRET_KEY and
+// CLERK_JWKS_URL set. That's how the CI integration job's migration step
+// failed: it configured DB_*/REDIS_* for the migrator and had no reason to
+// also configure Clerk. Callers that actually need these guarantees (see
+// cmd/control-plane and cmd/gateway) call Validate() explicitly.
 func (c *Config) Validate() error {
 	if c.Clerk.SecretKey == "" {
 		return fmt.Errorf("CLERK_SECRET_KEY is required")

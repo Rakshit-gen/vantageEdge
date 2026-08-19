@@ -31,6 +31,10 @@ func main() {
 		fmt.Printf("Failed to load config: %v\n", err)
 		os.Exit(1)
 	}
+	if err := cfg.Validate(); err != nil {
+		fmt.Printf("Invalid config: %v\n", err)
+		os.Exit(1)
+	}
 
 	log := logger.New(cfg.Observability.LogLevel, cfg.Observability.LogFormat)
 	log.Info().Msg("Starting API Gateway")
