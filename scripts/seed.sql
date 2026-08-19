@@ -131,19 +131,25 @@ VALUES
      60)
 ON CONFLICT (id) DO NOTHING;
 
--- Insert demo API keys
+-- Insert demo API keys.
+--
+-- key_hash must be sha256(plaintext key) hex-encoded (see
+-- internal/auth/apikey.Validator.ValidateKey) — the previous values here
+-- were 40 hex characters (SHA-1 length), not the 64 characters SHA-256
+-- produces, so these demo keys could never actually match on lookup and
+-- the "API key protected route" example in the README silently 401'd.
 INSERT INTO api_keys (
     id, tenant_id, user_id, name, key_prefix, key_hash, scopes,
     expires_at, is_active
 )
-VALUES 
+VALUES
     ('950e8400-e29b-41d4-a716-446655440000',
      '550e8400-e29b-41d4-a716-446655440000',
      '650e8400-e29b-41d4-a716-446655440000',
      'Demo Production Key',
      'vte_prod',
-     -- Hash of 'demo_key_abc123' (should be properly hashed in production)
-     'f7c3bc1d808e04732adf679965ccc34ca7ae3441',
+     -- sha256('demo_key_abc123')
+     '919ae995eb6fb44e4063b5602ff6c4c9dee77cf52dbf1ab79412fb8a67060597',
      ARRAY['read', 'write'],
      NOW() + INTERVAL '1 year',
      true),
@@ -152,12 +158,25 @@ VALUES
      '650e8400-e29b-41d4-a716-446655440000',
      'Demo Development Key',
      'vte_dev',
-     -- Hash of 'demo_key_dev456' (should be properly hashed in production)
-     'a94a8fe5ccb19ba61c4c0873d391e987982fbbd3',
+     -- sha256('demo_key_dev456')
+     '4b58be089da081508d296566b3c22992c9d468837da40a72d716765ff7bcd773',
      ARRAY['read'],
      NOW() + INTERVAL '6 months',
      true)
 ON CONFLICT (id) DO NOTHING;
+
+-- Origin pools: register each demo route's origin as a pool member so the
+-- load-balancer-aware gateway has something to select from (see migration
+-- 000007). With one member per pool this is equivalent to the old
+-- single-origin behavior; it's here so the demo works without requiring a
+-- second real origin.
+INSERT INTO route_origins (route_id, origin_id)
+VALUES
+    ('850e8400-e29b-41d4-a716-446655440001', '750e8400-e29b-41d4-a716-446655440000'),
+    ('850e8400-e29b-41d4-a716-446655440002', '750e8400-e29b-41d4-a716-446655440000'),
+    ('850e8400-e29b-41d4-a716-446655440003', '750e8400-e29b-41d4-a716-446655440000'),
+    ('850e8400-e29b-41d4-a716-446655440004', '750e8400-e29b-41d4-a716-446655440000')
+ON CONFLICT (route_id, origin_id) DO NOTHING;
 
 -- Insert some sample request logs for analytics demo
 INSERT INTO request_logs (

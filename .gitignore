@@ -49,8 +49,9 @@ redis-data/
 *.swp
 *.swo
 
-# Generated proto/gRPC files (if used)
-*.pb.go
+# Generated proto/gRPC files under api/proto/configpb are committed
+# on purpose: neither the Dockerfiles nor CI run `protoc` (see
+# `make proto-gen`), so `go build` needs them present in the tree.
 *.swagger.json
 
 # Code generation scripts (not needed in repo)

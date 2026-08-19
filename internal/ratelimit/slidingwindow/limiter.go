@@ -6,10 +6,10 @@ import (
 )
 
 type SlidingWindow struct {
-	mu              sync.Mutex
-	maxRequests     int
-	windowSize      time.Duration
-	requestTimings  []time.Time
+	mu             sync.Mutex
+	maxRequests    int
+	windowSize     time.Duration
+	requestTimings []time.Time
 }
 
 func NewSlidingWindow(maxRequests int, windowSize time.Duration) *SlidingWindow {

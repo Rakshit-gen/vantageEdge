@@ -6,20 +6,32 @@ A high-performance, multi-tenant API Gateway with distributed caching, rate limi
 
 The backend consists of 6 core components:
 
-1. **Control Plane Service** - Configuration and tenant management
+1. **Control Plane Service** - Configuration and tenant management (REST API for operators, gRPC for the gateway)
 2. **Authentication Layer** - Clerk integration and identity management
 3. **API Gateway** - Request routing and traffic management
-4. **Load Balancer** - Intelligent traffic distribution
-5. **Distributed Cache** - Redis-compatible caching layer
-6. **Observability** - Metrics, traces, and logs
+4. **Load Balancer** - Weighted, health-aware traffic distribution across a route's origin pool
+5. **Distributed Cache** - Redis-backed response cache and rate limiter, shared across gateway replicas
+6. **Observability** - Prometheus metrics and OpenTelemetry traces (exported to Jaeger)
+
+The gateway does not talk to Postgres to serve requests. It holds a short-TTL,
+push-invalidated cache of each tenant's config, fetched from the control
+plane's gRPC `ConfigService` (`api/proto/config.proto`) — `GetTenantConfig`
+for the initial/refetch path, `StreamConfigUpdates` for near-immediate
+invalidation when an operator changes a route or origin. This keeps
+database credentials off the gateway (a compromised or misconfigured
+gateway instance can't read or write tenant data it doesn't need to) and
+decouples gateway replica count from Postgres connection limits. The
+gateway does still write directly to Postgres for request-log analytics —
+that's a write on the side, not on the read path routing depends on.
 
 ## Tech Stack
 
-- **Language**: Go 1.21+
+- **Language**: Go 1.25+
 - **Database**: PostgreSQL 15
 - **Cache**: Redis 7
-- **Authentication**: Clerk
-- **Observability**: OpenTelemetry
+- **Authentication**: Clerk (JWT verified against Clerk's JWKS)
+- **Inter-service**: gRPC (control plane → gateway config sync)
+- **Observability**: Prometheus + OpenTelemetry/Jaeger
 - **Containerization**: Docker & Docker Compose
 
 ## Quick Start
@@ -82,24 +94,25 @@ make run-gateway
 
 ### Control Plane API (Port 8080)
 
-#### Tenants
+Every `/api/v1/*` route requires `Authorization: Bearer <clerk_jwt>`. The
+JWT is verified against Clerk's JWKS (see `CLERK_JWKS_URL` below) — there is
+no unauthenticated access to any tenant's data. The authenticated caller's
+tenant is resolved automatically from their Clerk identity (auto-provisioned
+on first request) and used for every operation; **you cannot pass a
+`tenant_id` to act on another tenant** — requests are always scoped to your
+own tenant, and any resource ID that belongs to a different tenant returns
+`404`.
 
-**Create Tenant**
+#### Tenant (your own)
+
 ```bash
-curl -X POST http://localhost:8080/api/v1/tenants \
-  -H "Authorization: Bearer <clerk_token>" \
+curl http://localhost:8080/api/v1/tenants/me \
+  -H "Authorization: Bearer <clerk_jwt>"
+
+curl -X PUT http://localhost:8080/api/v1/tenants/me \
+  -H "Authorization: Bearer <clerk_jwt>" \
   -H "Content-Type: application/json" \
-  -d '{
-    "name": "acme-corp",
-    "subdomain": "acme",
-    "clerk_org_id": "org_xxx"
-  }'
-```
-
-**Get Tenant**
-```bash
-curl -X GET http://localhost:8080/api/v1/tenants/:id \
-  -H "Authorization: Bearer <clerk_token>"
+  -d '{"name": "Acme Corp"}'
 ```
 
 #### Origins
@@ -107,10 +120,9 @@ curl -X GET http://localhost:8080/api/v1/tenants/:id \
 **Add Origin**
 ```bash
 curl -X POST http://localhost:8080/api/v1/origins \
-  -H "Authorization: Bearer <clerk_token>" \
+  -H "Authorization: Bearer <clerk_jwt>" \
   -H "Content-Type: application/json" \
   -d '{
-    "tenant_id": "tenant_uuid",
     "name": "api-backend",
     "url": "https://api.example.com",
     "health_check_path": "/health",
@@ -120,25 +132,25 @@ curl -X POST http://localhost:8080/api/v1/origins \
 
 #### Route Rules
 
+Route patterns use `*` as a wildcard matched by the gateway itself (e.g.
+`/api/users/*` matches `/api/users/123/profile`) — not SQL `LIKE` syntax.
+
 **Create Route**
 ```bash
 curl -X POST http://localhost:8080/api/v1/routes \
-  -H "Authorization: Bearer <clerk_token>" \
+  -H "Authorization: Bearer <clerk_jwt>" \
   -H "Content-Type: application/json" \
   -d '{
-    "tenant_id": "tenant_uuid",
+    "name": "users-api",
     "path_pattern": "/api/users/*",
     "origin_id": "origin_uuid",
     "auth_mode": "jwt_required",
-    "rate_limit": {
-      "requests_per_second": 100,
-      "burst": 200
-    },
-    "cache_policy": {
-      "enabled": true,
-      "ttl_seconds": 300,
-      "cache_key_pattern": "path+query"
-    }
+    "rate_limit_enabled": true,
+    "rate_limit_requests_per_second": 100,
+    "rate_limit_burst": 200,
+    "cache_enabled": true,
+    "cache_ttl_seconds": 300,
+    "cache_key_pattern": "path+query"
   }'
 ```
 
@@ -147,10 +159,9 @@ curl -X POST http://localhost:8080/api/v1/routes \
 **Generate API Key**
 ```bash
 curl -X POST http://localhost:8080/api/v1/api-keys \
-  -H "Authorization: Bearer <clerk_token>" \
+  -H "Authorization: Bearer <clerk_jwt>" \
   -H "Content-Type: application/json" \
   -d '{
-    "tenant_id": "tenant_uuid",
     "name": "production-key",
     "scopes": ["read", "write"],
     "expires_at": "2025-12-31T23:59:59Z"

@@ -1,0 +1,78 @@
+syntax = "proto3";
+
+package vantageedge.config.v1;
+
+option go_package = "github.com/vantageedge/backend/api/proto/configpb;configpb";
+
+// ConfigService is served by the control plane and consumed by the
+// gateway. It replaces the gateway reading tenant/route/origin
+// configuration directly out of Postgres: previously every gateway
+// process needed its own database credentials just to answer "which route
+// matches this request," which is unnecessary blast radius (a compromised
+// or misconfigured gateway instance could read/write any table its DB
+// user had access to) and couples the gateway's scaling to Postgres
+// connection limits. The gateway now only needs a connection to the
+// control plane's gRPC port.
+service ConfigService {
+  // GetTenantConfig returns a tenant's full serving configuration —
+  // itself, its active routes, and each route's origin pool — in one
+  // round trip, keyed by the subdomain the gateway extracts from the
+  // request Host header.
+  rpc GetTenantConfig(GetTenantConfigRequest) returns (TenantConfig);
+
+  // StreamConfigUpdates pushes an event whenever a tenant's routes or
+  // origins change, so a gateway holding that tenant's config in its local
+  // cache can invalidate it immediately instead of waiting out a fixed
+  // TTL. The stream carries only tenant IDs (not the changed data itself)
+  // — the client re-fetches via GetTenantConfig, keeping this RPC cheap
+  // and avoiding a second, divergent representation of the same config.
+  rpc StreamConfigUpdates(StreamConfigUpdatesRequest) returns (stream ConfigUpdateEvent);
+}
+
+message GetTenantConfigRequest {
+  string subdomain = 1;
+}
+
+message StreamConfigUpdatesRequest {}
+
+message ConfigUpdateEvent {
+  string tenant_id = 1;
+}
+
+message TenantConfig {
+  string tenant_id = 1;
+  string subdomain = 2;
+  string status = 3;
+  repeated RouteConfig routes = 4;
+}
+
+message RouteConfig {
+  string id = 1;
+  string name = 2;
+  string path_pattern = 3;
+  repeated string methods = 4;
+  int32 priority = 5;
+  string auth_mode = 6;
+
+  bool rate_limit_enabled = 7;
+  int32 rate_limit_requests_per_second = 8;
+  int32 rate_limit_burst = 9;
+  string rate_limit_key_strategy = 10;
+
+  bool cache_enabled = 11;
+  int32 cache_ttl_seconds = 12;
+  string cache_key_pattern = 13;
+
+  int32 timeout_seconds = 14;
+  int32 retry_attempts = 15;
+
+  repeated OriginConfig origins = 16;
+}
+
+message OriginConfig {
+  string id = 1;
+  string url = 2;
+  int32 weight = 3;
+  int32 timeout_seconds = 4;
+  string health_check_path = 5;
+}

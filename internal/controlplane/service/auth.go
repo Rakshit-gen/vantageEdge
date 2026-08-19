@@ -2,9 +2,11 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/google/uuid"
+	"github.com/vantageedge/backend/internal/auth/clerk"
 	"github.com/vantageedge/backend/internal/models"
 	"github.com/vantageedge/backend/internal/repository"
 	"github.com/vantageedge/backend/pkg/logger"
@@ -32,15 +34,20 @@ type SyncTenantRequest struct {
 }
 
 type authService struct {
-	repos  *repository.Repository
-	logger *logger.Logger
+	repos       *repository.Repository
+	clerkClient *clerk.ClerkClient
+	logger      *logger.Logger
 }
 
-func NewAuthService(repos *repository.Repository, log *logger.Logger) AuthService {
-	return &authService{repos: repos, logger: log}
+func NewAuthService(repos *repository.Repository, clerkClient *clerk.ClerkClient, log *logger.Logger) AuthService {
+	return &authService{repos: repos, clerkClient: clerkClient, logger: log}
 }
 
 func (s *authService) SyncUser(ctx context.Context, req *SyncUserRequest) (*models.User, error) {
+	if req.ClerkUserID == "" {
+		return nil, fmt.Errorf("clerk_user_id is required")
+	}
+
 	// Try to get existing user
 	existingUser, err := s.repos.User.GetByClerkID(ctx, req.ClerkUserID)
 	if err == nil {
@@ -57,6 +64,25 @@ func (s *authService) SyncUser(ctx context.Context, req *SyncUserRequest) (*mode
 			return nil, err
 		}
 		return existingUser, nil
+	}
+
+	// User doesn't exist yet. The JWT session token may not carry an email
+	// claim (Clerk only includes it if the session token's JWT template
+	// adds it), so fall back to the Backend API rather than persist a
+	// blank/garbage email into a NOT NULL column.
+	if req.Email == "" && s.clerkClient != nil {
+		if info, lookupErr := s.clerkClient.GetUser(ctx, req.ClerkUserID); lookupErr == nil && info.Email != "" {
+			req.Email = info.Email
+			if req.FirstName == nil {
+				req.FirstName = info.FirstName
+			}
+			if req.LastName == nil {
+				req.LastName = info.LastName
+			}
+		}
+	}
+	if req.Email == "" {
+		return nil, fmt.Errorf("unable to determine email for clerk user %s", req.ClerkUserID)
 	}
 
 	// User doesn't exist, create a new tenant and user
@@ -112,7 +138,7 @@ func (s *authService) SyncUser(ctx context.Context, req *SyncUserRequest) (*mode
 		Email:       req.Email,
 		FirstName:   firstName,
 		LastName:    lastName,
-		Role:        "admin", // First user is admin
+		Role:        "owner", // First user in a newly-provisioned tenant owns it
 		Status:      "active",
 	}
 

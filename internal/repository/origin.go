@@ -47,8 +47,11 @@ func (r *originRepository) ListByTenant(ctx context.Context, tenantID uuid.UUID)
 }
 
 func (r *originRepository) Update(ctx context.Context, origin *models.Origin) error {
-	query := `UPDATE origins SET name = $1, url = $2, timeout_seconds = $3 WHERE id = $4`
-	_, err := r.db.ExecContext(ctx, query, origin.Name, origin.URL, origin.TimeoutSeconds, origin.ID)
+	// See the comment on routeRepository.Update: every user-editable column
+	// must be listed here or updates to it are silently dropped. Weight was
+	// previously missing despite UpdateOriginRequest accepting it.
+	query := `UPDATE origins SET name = $1, url = $2, timeout_seconds = $3, weight = $4 WHERE id = $5`
+	_, err := r.db.ExecContext(ctx, query, origin.Name, origin.URL, origin.TimeoutSeconds, origin.Weight, origin.ID)
 	return err
 }
 

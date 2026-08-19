@@ -3,91 +3,93 @@ package observability
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"time"
+
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
+	"go.opentelemetry.io/otel/propagation"
+	"go.opentelemetry.io/otel/sdk/resource"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	semconv "go.opentelemetry.io/otel/semconv/v1.24.0"
+	"go.opentelemetry.io/otel/trace"
 )
 
-type TraceSpan struct {
-	ID        string
-	TraceID   string
-	SpanID    string
-	ParentID  string
-	Operation string
-	StartTime time.Time
-	EndTime   time.Time
-	Status    string
-	Error     error
-	Tags      map[string]interface{}
-}
-
-type Tracer struct {
-	traces map[string][]*TraceSpan
-}
-
-func NewTracer() *Tracer {
-	return &Tracer{
-		traces: make(map[string][]*TraceSpan),
+// InitTracing wires this process's spans to Jaeger over OTLP/HTTP.
+//
+// docker-compose's Jaeger service was previously receiving nothing: the
+// package's old Tracer type only recorded spans into an in-memory map that
+// was never read by anything, and nothing in cmd/*/main.go ever
+// constructed one. otlpEndpoint should be a host:port (e.g. "jaeger:4318",
+// matching the OTLP HTTP port docker-compose now exposes) — not a full
+// URL, since otlptracehttp builds the path itself.
+//
+// Returns a shutdown func that must be called (with a bounded context) on
+// process exit to flush any buffered spans, and a no-op shutdown if
+// tracing is disabled.
+func InitTracing(ctx context.Context, serviceName, otlpEndpoint string, enabled bool) (func(context.Context) error, error) {
+	noop := func(context.Context) error { return nil }
+	if !enabled {
+		return noop, nil
 	}
-}
-
-// StartSpan creates a new trace span
-func (t *Tracer) StartSpan(ctx context.Context, traceID, operation string) *TraceSpan {
-	span := &TraceSpan{
-		TraceID:   traceID,
-		SpanID:    generateSpanID(),
-		Operation: operation,
-		StartTime: time.Now(),
-		Status:    "running",
-		Tags:      make(map[string]interface{}),
+	if otlpEndpoint == "" {
+		return noop, fmt.Errorf("OTEL_EXPORTER_ENDPOINT is required when OTEL_ENABLED=true")
 	}
 
-	if parentID := ctx.Value("parent_span_id"); parentID != nil {
-		span.ParentID = parentID.(string)
+	// Accept either a bare host:port or a full URL (docker-compose's
+	// previous default was a full Jaeger Thrift collector URL); normalize
+	// to just the host:port otlptracehttp expects.
+	endpoint := otlpEndpoint
+	if u, err := url.Parse(otlpEndpoint); err == nil && u.Host != "" {
+		endpoint = u.Host
 	}
 
-	return span
-}
-
-// EndSpan marks a span as complete
-func (t *Tracer) EndSpan(span *TraceSpan, err error) {
-	span.EndTime = time.Now()
+	exporter, err := otlptracehttp.New(ctx,
+		otlptracehttp.WithEndpoint(endpoint),
+		otlptracehttp.WithInsecure(),
+	)
 	if err != nil {
-		span.Status = "error"
-		span.Error = err
-	} else {
-		span.Status = "success"
+		return noop, fmt.Errorf("failed to create OTLP trace exporter: %w", err)
 	}
-}
 
-// AddTag adds a tag to a span
-func (span *TraceSpan) AddTag(key string, value interface{}) {
-	span.Tags[key] = value
-}
-
-// GetDurationMs returns the span duration in milliseconds
-func (span *TraceSpan) GetDurationMs() float64 {
-	if span.EndTime.IsZero() {
-		span.EndTime = time.Now()
+	res, err := resource.New(ctx,
+		resource.WithAttributes(
+			semconv.ServiceNameKey.String(serviceName),
+		),
+	)
+	if err != nil {
+		return noop, fmt.Errorf("failed to build trace resource: %w", err)
 	}
-	return span.EndTime.Sub(span.StartTime).Seconds() * 1000
+
+	provider := sdktrace.NewTracerProvider(
+		sdktrace.WithBatcher(exporter, sdktrace.WithBatchTimeout(5*time.Second)),
+		sdktrace.WithResource(res),
+	)
+	otel.SetTracerProvider(provider)
+	otel.SetTextMapPropagator(propagation.TraceContext{})
+
+	return provider.Shutdown, nil
 }
 
-// generateSpanID generates a unique span ID
-func generateSpanID() string {
-	return fmt.Sprintf("%d", time.Now().UnixNano())
+// Tracer returns the named tracer from the globally configured provider
+// (a no-op tracer if InitTracing was never called or was disabled, per
+// the otel API's own contract — callers don't need to branch on whether
+// tracing is enabled).
+func Tracer(name string) trace.Tracer {
+	return otel.Tracer(name)
 }
 
-// ExportSpan exports a span for storage/analysis
-func (span *TraceSpan) Export() map[string]interface{} {
-	return map[string]interface{}{
-		"trace_id":   span.TraceID,
-		"span_id":    span.SpanID,
-		"parent_id":  span.ParentID,
-		"operation":  span.Operation,
-		"start_time": span.StartTime.Unix(),
-		"end_time":   span.EndTime.Unix(),
-		"duration_ms": span.GetDurationMs(),
-		"status":     span.Status,
-		"error":      span.Error,
-		"tags":       span.Tags,
+// RequestAttributes are the common span attributes both services attach to
+// every request span.
+func RequestAttributes(tenantID, routeID, method, path string) []attribute.KeyValue {
+	attrs := []attribute.KeyValue{
+		attribute.String("tenant.id", tenantID),
+		attribute.String("http.method", method),
+		attribute.String("http.path", path),
 	}
+	if routeID != "" {
+		attrs = append(attrs, attribute.String("route.id", routeID))
+	}
+	return attrs
 }

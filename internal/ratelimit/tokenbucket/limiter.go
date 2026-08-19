@@ -15,10 +15,10 @@ type TokenBucket struct {
 
 func NewTokenBucket(capacity, refillRate float64) *TokenBucket {
 	return &TokenBucket{
-		capacity:       capacity,
+		capacity:        capacity,
 		tokensAvailable: capacity,
-		refillRate:     refillRate,
-		lastRefillTime: time.Now(),
+		refillRate:      refillRate,
+		lastRefillTime:  time.Now(),
 	}
 }
 
@@ -50,6 +50,13 @@ func (tb *TokenBucket) refill() {
 
 	tokensToAdd := elapsed * tb.refillRate
 	tb.tokensAvailable = min(tb.capacity, tb.tokensAvailable+tokensToAdd)
+}
+
+// Capacity returns the bucket's maximum token capacity.
+func (tb *TokenBucket) Capacity() float64 {
+	tb.mu.Lock()
+	defer tb.mu.Unlock()
+	return tb.capacity
 }
 
 // GetAvailableTokens returns the current number of available tokens

@@ -5,7 +5,7 @@ services:
     container_name: vantageedge-postgres
     environment:
       POSTGRES_USER: vantageedge
-      POSTGRES_PASSWORD: changeme_db_password
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD must be set in .env}
       POSTGRES_DB: vantageedge
     ports:
       - "5432:5432"
@@ -47,7 +47,7 @@ services:
       DB_HOST: postgres
       DB_PORT: 5432
       DB_USER: vantageedge
-      DB_PASSWORD: changeme_db_password
+      DB_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD must be set in .env}
       DB_NAME: vantageedge
       DB_SSLMODE: disable
       CLERK_SECRET_KEY: ${CLERK_SECRET_KEY}
@@ -77,13 +77,17 @@ services:
       DB_HOST: postgres
       DB_PORT: 5432
       DB_USER: vantageedge
-      DB_PASSWORD: changeme_db_password
+      DB_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD must be set in .env}
       DB_NAME: vantageedge
       DB_SSLMODE: disable
       REDIS_HOST: redis
       REDIS_PORT: 6379
-      CLERK_SECRET_KEY: ${CLERK_SECRET_KEY}
+      CLERK_SECRET_KEY: ${CLERK_SECRET_KEY:?CLERK_SECRET_KEY must be set in .env}
       CLERK_PUBLISHABLE_KEY: ${CLERK_PUBLISHABLE_KEY}
+      CLERK_JWKS_URL: ${CLERK_JWKS_URL:?CLERK_JWKS_URL must be set in .env — see .env.example}
+      JWT_ISSUER: ${JWT_ISSUER}
+      JWT_AUDIENCE: ${JWT_AUDIENCE}
+      OTEL_EXPORTER_ENDPOINT: jaeger:4318
       LOG_LEVEL: info
       METRICS_ENABLED: true
       METRICS_PORT: 9091
@@ -120,13 +124,17 @@ services:
       DB_HOST: postgres
       DB_PORT: 5432
       DB_USER: vantageedge
-      DB_PASSWORD: changeme_db_password
+      DB_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD must be set in .env}
       DB_NAME: vantageedge
       DB_SSLMODE: disable
       REDIS_HOST: redis
       REDIS_PORT: 6379
-      CLERK_SECRET_KEY: ${CLERK_SECRET_KEY}
-      CONTROL_PLANE_GRPC: control-plane:9090
+      CLERK_SECRET_KEY: ${CLERK_SECRET_KEY:?CLERK_SECRET_KEY must be set in .env}
+      CLERK_JWKS_URL: ${CLERK_JWKS_URL:?CLERK_JWKS_URL must be set in .env — see .env.example}
+      JWT_ISSUER: ${JWT_ISSUER}
+      JWT_AUDIENCE: ${JWT_AUDIENCE}
+      CONTROL_PLANE_GRPC_ADDR: control-plane:9090
+      OTEL_EXPORTER_ENDPOINT: jaeger:4318
       LOG_LEVEL: info
       RATE_LIMIT_ENABLED: true
       CACHE_ENABLED: true
@@ -161,6 +169,8 @@ services:
       - "14268:14268"
       - "14250:14250"
       - "9411:9411"
+      - "4317:4317" # OTLP gRPC
+      - "4318:4318" # OTLP HTTP — what this project's services actually export to
     environment:
       COLLECTOR_OTLP_ENABLED: true
     networks:
@@ -188,7 +198,7 @@ services:
     ports:
       - "3001:3000"
     environment:
-      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?GRAFANA_ADMIN_PASSWORD must be set in .env}
       GF_USERS_ALLOW_SIGN_UP: false
     volumes:
       - grafana_data:/var/lib/grafana

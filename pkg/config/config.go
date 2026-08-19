@@ -38,6 +38,12 @@ type GatewayConfig struct {
 	Host   string
 	Port   int
 	Domain string
+	// ControlPlaneGRPCAddr is where the gateway's config client dials the
+	// control plane's ConfigService (see api/proto/config.proto). Previously
+	// docker-compose set an env var for this (CONTROL_PLANE_GRPC) that
+	// nothing in the code ever read — the gateway only ever talked to
+	// Postgres directly.
+	ControlPlaneGRPCAddr string
 }
 
 type DatabaseConfig struct {
@@ -65,6 +71,9 @@ type ClerkConfig struct {
 	SecretKey      string
 	PublishableKey string
 	APIURL         string
+	JWKSURL        string
+	Issuer         string
+	Audience       string
 }
 
 type RateLimitConfig struct {
@@ -118,9 +127,10 @@ func Load() (*Config, error) {
 			GRPCPort: getEnvAsInt("CONTROL_PLANE_GRPC_PORT", 9090),
 		},
 		Gateway: GatewayConfig{
-			Host:   getEnv("GATEWAY_HOST", "0.0.0.0"),
-			Port:   getEnvAsInt("GATEWAY_PORT", 8000),
-			Domain: getEnv("GATEWAY_DOMAIN", "vantageedge.dev"),
+			Host:                 getEnv("GATEWAY_HOST", "0.0.0.0"),
+			Port:                 getEnvAsInt("GATEWAY_PORT", 8000),
+			Domain:               getEnv("GATEWAY_DOMAIN", "vantageedge.dev"),
+			ControlPlaneGRPCAddr: getEnv("CONTROL_PLANE_GRPC_ADDR", "control-plane:9090"),
 		},
 		Database: DatabaseConfig{
 			Host:               getEnv("DB_HOST", "localhost"),
@@ -145,6 +155,9 @@ func Load() (*Config, error) {
 			SecretKey:      getEnv("CLERK_SECRET_KEY", ""),
 			PublishableKey: getEnv("CLERK_PUBLISHABLE_KEY", ""),
 			APIURL:         getEnv("CLERK_API_URL", "https://api.clerk.com/v1"),
+			JWKSURL:        getEnv("CLERK_JWKS_URL", ""),
+			Issuer:         getEnv("JWT_ISSUER", ""),
+			Audience:       getEnv("JWT_AUDIENCE", ""),
 		},
 		RateLimit: RateLimitConfig{
 			Enabled:      getEnvAsBool("RATE_LIMIT_ENABLED", true),
@@ -163,9 +176,13 @@ func Load() (*Config, error) {
 			MaxRetryAttempts:    getEnvAsInt("LB_MAX_RETRY_ATTEMPTS", 3),
 		},
 		Observability: ObservabilityConfig{
-			OTELEnabled:          getEnvAsBool("OTEL_ENABLED", true),
-			OTELServiceName:      getEnv("OTEL_SERVICE_NAME", "vantageedge"),
-			OTELExporterEndpoint: getEnv("OTEL_EXPORTER_ENDPOINT", "http://jaeger:14268/api/traces"),
+			OTELEnabled:     getEnvAsBool("OTEL_ENABLED", true),
+			OTELServiceName: getEnv("OTEL_SERVICE_NAME", "vantageedge"),
+			// Jaeger's OTLP/HTTP receiver, not the legacy Thrift collector
+			// port (14268): the OTel Go SDK exports via OTLP, and the
+			// otel-go Jaeger Thrift exporter that used to pair with that
+			// port has been removed upstream.
+			OTELExporterEndpoint: getEnv("OTEL_EXPORTER_ENDPOINT", "jaeger:4318"),
 			MetricsEnabled:       getEnvAsBool("METRICS_ENABLED", true),
 			MetricsPort:          getEnvAsInt("METRICS_PORT", 9091),
 			LogLevel:             getEnv("LOG_LEVEL", "info"),
@@ -177,7 +194,11 @@ func Load() (*Config, error) {
 			if os.Getenv("CORS_ALLOWED_ORIGINS") != "" {
 				defaultOrigins = getEnvAsSlice("CORS_ALLOWED_ORIGINS", []string{})
 			} else if env == "production" {
-				defaultOrigins = []string{"*"}
+				// No safe default in production: a wildcard origin combined
+				// with AllowCredentials lets any site read authenticated
+				// responses cross-origin. Force an explicit, empty list so
+				// CORS_ALLOWED_ORIGINS must be set deliberately.
+				defaultOrigins = []string{}
 			} else {
 				defaultOrigins = []string{"http://localhost:3000", "https://vantageedge.vercel.app"}
 			}
@@ -202,12 +223,30 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("CLERK_SECRET_KEY is required")
 	}
 
+	if c.Clerk.JWKSURL == "" {
+		return fmt.Errorf("CLERK_JWKS_URL is required (found under your Clerk instance's API Keys page, typically https://<your-instance>.clerk.accounts.dev/.well-known/jwks.json)")
+	}
+
 	if c.Database.Host == "" {
 		return fmt.Errorf("DB_HOST is required")
 	}
 
 	if c.Redis.Host == "" {
 		return fmt.Errorf("REDIS_HOST is required")
+	}
+
+	if c.App.Env == "production" {
+		if c.Database.Password == "" || c.Database.Password == "changeme" || c.Database.Password == "changeme_db_password" {
+			return fmt.Errorf("DB_PASSWORD must be set to a non-default value in production")
+		}
+		for _, origin := range c.CORS.AllowedOrigins {
+			if origin == "*" {
+				return fmt.Errorf("CORS_ALLOWED_ORIGINS cannot be \"*\" in production, especially with credentials enabled")
+			}
+		}
+		if len(c.CORS.AllowedOrigins) == 0 {
+			return fmt.Errorf("CORS_ALLOWED_ORIGINS must be set explicitly in production")
+		}
 	}
 
 	return nil

@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/vantageedge/backend/internal/repository"
@@ -44,9 +45,17 @@ func (v *Validator) ValidateKey(ctx context.Context, keyString string) (*KeyInfo
 	}
 
 	// Check expiration
-	if apiKey.ExpiresAt != nil && apiKey.ExpiresAt.Before(now()) {
+	if apiKey.ExpiresAt != nil && apiKey.ExpiresAt.Before(time.Now()) {
 		return nil, fmt.Errorf("api key is expired")
 	}
+
+	// Track usage. Best-effort: a logging failure here must not fail auth,
+	// and this must not block the request on the write.
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = v.repos.APIKey.UpdateUsage(ctx, apiKey.ID)
+	}()
 
 	return &KeyInfo{
 		ID:       apiKey.ID,
@@ -72,10 +81,4 @@ func (k *KeyInfo) HasScope(scope string) bool {
 		}
 	}
 	return false
-}
-
-func now() interface{} {
-	// Placeholder - will be imported from time package in actual implementation
-	// This avoids compiler error from unused now() function
-	return nil
 }

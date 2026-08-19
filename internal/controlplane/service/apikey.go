@@ -5,6 +5,8 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/vantageedge/backend/internal/models"
@@ -14,6 +16,7 @@ import (
 
 type APIKeyService interface {
 	ListByTenant(ctx context.Context, tenantID uuid.UUID) ([]*models.APIKey, error)
+	GetAPIKey(ctx context.Context, id uuid.UUID) (*models.APIKey, error)
 	CreateAPIKey(ctx context.Context, req *CreateAPIKeyRequest) (*models.APIKey, string, error)
 	DeleteAPIKey(ctx context.Context, id uuid.UUID) error
 }
@@ -37,6 +40,10 @@ func NewAPIKeyService(repos *repository.Repository, log *logger.Logger) APIKeySe
 
 func (s *apiKeyService) ListByTenant(ctx context.Context, tenantID uuid.UUID) ([]*models.APIKey, error) {
 	return s.repos.APIKey.ListByTenant(ctx, tenantID)
+}
+
+func (s *apiKeyService) GetAPIKey(ctx context.Context, id uuid.UUID) (*models.APIKey, error) {
+	return s.repos.APIKey.GetByID(ctx, id)
 }
 
 func (s *apiKeyService) CreateAPIKey(ctx context.Context, req *CreateAPIKeyRequest) (*models.APIKey, string, error) {
@@ -67,11 +74,18 @@ func (s *apiKeyService) CreateAPIKey(ctx context.Context, req *CreateAPIKeyReque
 		Metadata:   models.JSONB{},
 	}
 
-	// Set expiration if provided
-	if req.ExpiresAt != nil {
-		// Parse the expiration date string (assuming ISO format)
-		// For now, just set it directly - the repository should handle parsing
-		// In production, you'd want proper date parsing here
+	// Set expiration if provided. This was previously a no-op (the parsed
+	// value was discarded), so a caller requesting a time-limited key
+	// silently got one that never expires.
+	if req.ExpiresAt != nil && *req.ExpiresAt != "" {
+		expiresAt, err := time.Parse(time.RFC3339, *req.ExpiresAt)
+		if err != nil {
+			return nil, "", fmt.Errorf("invalid expires_at (expected RFC3339): %w", err)
+		}
+		if !expiresAt.After(time.Now()) {
+			return nil, "", fmt.Errorf("expires_at must be in the future")
+		}
+		key.ExpiresAt = &expiresAt
 	}
 
 	if err := s.repos.APIKey.Create(ctx, key); err != nil {

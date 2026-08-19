@@ -58,6 +58,30 @@ func (c *Client) Set(ctx context.Context, key string, value interface{}, ttl tim
 	return c.client.Set(ctx, key, data, ttl).Err()
 }
 
+// GetBytes retrieves a raw value from cache without any JSON envelope.
+// ok is false on a cache miss (no error).
+func (c *Client) GetBytes(ctx context.Context, key string) ([]byte, bool, error) {
+	val, err := c.client.Get(ctx, key).Bytes()
+	if err != nil {
+		if err == redis.Nil {
+			return nil, false, nil
+		}
+		return nil, false, err
+	}
+	return val, true, nil
+}
+
+// SetBytes stores a raw value in cache without any JSON envelope.
+func (c *Client) SetBytes(ctx context.Context, key string, value []byte, ttl time.Duration) error {
+	return c.client.Set(ctx, key, value, ttl).Err()
+}
+
+// Eval runs a Lua script against Redis, used for atomic rate-limit
+// check-and-decrement operations.
+func (c *Client) Eval(ctx context.Context, script string, keys []string, args ...interface{}) (interface{}, error) {
+	return c.client.Eval(ctx, script, keys, args...).Result()
+}
+
 // GetJSON retrieves and unmarshals a JSON value from cache
 func (c *Client) GetJSON(ctx context.Context, key string, dest interface{}) error {
 	val, err := c.client.Get(ctx, key).Result()

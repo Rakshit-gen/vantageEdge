@@ -17,6 +17,7 @@ type HealthChecker struct {
 	checkInterval  time.Duration
 	checkTimeout   time.Duration
 	healthStatuses map[string]bool // origin_id -> is_healthy
+	monitored      map[string]bool // origin_id -> a monitoring goroutine already exists for it
 	stopChan       chan struct{}
 }
 
@@ -26,6 +27,7 @@ func NewHealthChecker(log *logger.Logger, interval time.Duration) *HealthChecker
 		checkInterval:  interval,
 		checkTimeout:   5 * time.Second,
 		healthStatuses: make(map[string]bool),
+		monitored:      make(map[string]bool),
 		stopChan:       make(chan struct{}),
 		client: &http.Client{
 			Timeout: 5 * time.Second,
@@ -33,9 +35,52 @@ func NewHealthChecker(log *logger.Logger, interval time.Duration) *HealthChecker
 	}
 }
 
-// Start begins periodic health checks for origins
+// Start begins periodic health checks for a fixed, known-in-advance set of
+// origins. Kept for callers that already have the full origin set
+// up front; the gateway (which only learns about origins lazily, as
+// tenants send traffic) uses EnsureMonitored instead.
 func (hc *HealthChecker) Start(origins []*models.Origin) {
 	go hc.runHealthChecks(origins)
+}
+
+// EnsureMonitored idempotently starts a background monitoring goroutine
+// for each origin in origins that isn't already being checked. Safe to
+// call repeatedly (e.g. once per gateway request that touches a route's
+// origin pool) with overlapping origin sets — an origin shared by multiple
+// routes gets exactly one monitoring goroutine, not one per route.
+func (hc *HealthChecker) EnsureMonitored(origins []*models.Origin) {
+	hc.mu.Lock()
+	var toStart []*models.Origin
+	for _, origin := range origins {
+		id := origin.ID.String()
+		if !hc.monitored[id] {
+			hc.monitored[id] = true
+			toStart = append(toStart, origin)
+		}
+	}
+	hc.mu.Unlock()
+
+	for _, origin := range toStart {
+		go hc.monitorOrigin(origin)
+	}
+}
+
+// monitorOrigin checks one origin immediately, then on every tick, until
+// Stop is called.
+func (hc *HealthChecker) monitorOrigin(origin *models.Origin) {
+	hc.checkOriginHealth(origin)
+
+	ticker := time.NewTicker(hc.checkInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-hc.stopChan:
+			return
+		case <-ticker.C:
+			hc.checkOriginHealth(origin)
+		}
+	}
 }
 
 // Stop stops the health checker

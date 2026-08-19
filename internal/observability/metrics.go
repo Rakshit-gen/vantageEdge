@@ -1,140 +1,116 @@
+// Package observability provides real, exported Prometheus metrics for the
+// gateway and control plane.
+//
+// The previous version of this package kept an in-memory struct
+// (request counts, latency sums, a hand-rolled "tracer") that was never
+// wired into any handler and exposed nothing over the network — despite
+// docker-compose provisioning Prometheus and Jaeger to scrape/receive from
+// it. That made the observability stack pure decoration. This version
+// registers real prometheus.Collectors and serves them over /metrics so the
+// existing Prometheus service in docker-compose has something to scrape.
+//
+// Distributed tracing (Jaeger/OTel export) is not implemented here — see
+// the production-readiness report for that gap.
 package observability
 
 import (
-	"sync"
+	"context"
+	"errors"
+	"net/http"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
+// Metrics holds the Prometheus collectors for a service (gateway or
+// control-plane). Create one per process with NewMetrics and reuse it.
 type Metrics struct {
-	mu sync.RWMutex
+	registry *prometheus.Registry
 
-	// Request metrics
-	totalRequests   int64
-	totalErrors     int64
-	totalCacheHits  int64
-	totalCacheMisses int64
-
-	// Latency metrics
-	minLatencyMs float64
-	maxLatencyMs float64
-	avgLatencyMs float64
-	latencySum   float64
-	latencyCount int64
-
-	// Status code metrics
-	statusCodes map[int]int64
-
-	// Origin metrics
-	originRequests map[string]int64
-	originErrors   map[string]int64
+	RequestsTotal   *prometheus.CounterVec
+	RequestDuration *prometheus.HistogramVec
+	CacheResults    *prometheus.CounterVec
+	RateLimited     *prometheus.CounterVec
+	OriginErrors    *prometheus.CounterVec
 }
 
-func NewMetrics() *Metrics {
-	return &Metrics{
-		statusCodes:      make(map[int]int64),
-		originRequests:   make(map[string]int64),
-		originErrors:     make(map[string]int64),
-		minLatencyMs:     -1,
+// NewMetrics creates and registers the collectors for one service.
+// namespace distinguishes gateway vs control-plane metrics
+// (e.g. "vantageedge_gateway").
+func NewMetrics(namespace string) *Metrics {
+	registry := prometheus.NewRegistry()
+
+	m := &Metrics{
+		registry: registry,
+		RequestsTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: namespace,
+			Name:      "requests_total",
+			Help:      "Total number of requests processed, labeled by tenant, route, method, and status code.",
+		}, []string{"tenant", "route", "method", "status"}),
+		RequestDuration: prometheus.NewHistogramVec(prometheus.HistogramOpts{
+			Namespace: namespace,
+			Name:      "request_duration_seconds",
+			Help:      "Request latency in seconds, labeled by tenant and route.",
+			Buckets:   prometheus.DefBuckets,
+		}, []string{"tenant", "route"}),
+		CacheResults: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: namespace,
+			Name:      "cache_results_total",
+			Help:      "Cache hits/misses, labeled by tenant, route, and result (hit|miss).",
+		}, []string{"tenant", "route", "result"}),
+		RateLimited: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: namespace,
+			Name:      "rate_limited_total",
+			Help:      "Requests rejected by rate limiting, labeled by tenant and route.",
+		}, []string{"tenant", "route"}),
+		OriginErrors: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: namespace,
+			Name:      "origin_errors_total",
+			Help:      "Errors proxying to an origin, labeled by tenant and origin.",
+		}, []string{"tenant", "origin"}),
 	}
+
+	registry.MustRegister(
+		m.RequestsTotal,
+		m.RequestDuration,
+		m.CacheResults,
+		m.RateLimited,
+		m.OriginErrors,
+		prometheus.NewGoCollector(),
+		prometheus.NewProcessCollector(prometheus.ProcessCollectorOpts{}),
+	)
+
+	return m
 }
 
-// RecordRequest records a new request
-func (m *Metrics) RecordRequest(statusCode int, latencyMs float64, cacheHit bool, originID string) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	m.totalRequests++
-	m.statusCodes[statusCode]++
-	m.originRequests[originID]++
-
-	// Record latency
-	m.latencySum += latencyMs
-	m.latencyCount++
-	if m.minLatencyMs < 0 || latencyMs < m.minLatencyMs {
-		m.minLatencyMs = latencyMs
-	}
-	if latencyMs > m.maxLatencyMs {
-		m.maxLatencyMs = latencyMs
-	}
-	m.avgLatencyMs = m.latencySum / float64(m.latencyCount)
-
-	// Record cache hit/miss
-	if cacheHit {
-		m.totalCacheHits++
-	} else {
-		m.totalCacheMisses++
-	}
-
-	// Track errors
-	if statusCode >= 400 {
-		m.totalErrors++
-		m.originErrors[originID]++
-	}
+// Handler returns the /metrics HTTP handler for this service's registry.
+func (m *Metrics) Handler() http.Handler {
+	return promhttp.HandlerFor(m.registry, promhttp.HandlerOpts{})
 }
 
-// GetMetrics returns a snapshot of current metrics
-func (m *Metrics) GetMetrics() map[string]interface{} {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+// Serve starts a dedicated HTTP server exposing /metrics on addr and blocks
+// until ctx is cancelled, then shuts it down gracefully. Run it in its own
+// goroutine.
+func (m *Metrics) Serve(ctx context.Context, addr string) error {
+	mux := http.NewServeMux()
+	mux.Handle("/metrics", m.Handler())
+	server := &http.Server{Addr: addr, Handler: mux}
 
-	totalRequests := m.totalRequests
-	if totalRequests == 0 {
-		totalRequests = 1
+	errCh := make(chan error, 1)
+	go func() {
+		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			errCh <- err
+		}
+		close(errCh)
+	}()
+
+	select {
+	case <-ctx.Done():
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		return server.Shutdown(shutdownCtx)
+	case err := <-errCh:
+		return err
 	}
-
-	cacheHitRate := float64(m.totalCacheHits) / float64(m.totalRequests+1) * 100
-
-	return map[string]interface{}{
-		"total_requests":    m.totalRequests,
-		"total_errors":      m.totalErrors,
-		"error_rate":        float64(m.totalErrors) / float64(totalRequests) * 100,
-		"cache_hits":        m.totalCacheHits,
-		"cache_misses":      m.totalCacheMisses,
-		"cache_hit_rate":    cacheHitRate,
-		"avg_latency_ms":    m.avgLatencyMs,
-		"min_latency_ms":    m.minLatencyMs,
-		"max_latency_ms":    m.maxLatencyMs,
-		"status_codes":      m.statusCodes,
-		"origin_requests":   m.originRequests,
-		"origin_errors":     m.originErrors,
-	}
-}
-
-// Reset clears all metrics
-func (m *Metrics) Reset() {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	m.totalRequests = 0
-	m.totalErrors = 0
-	m.totalCacheHits = 0
-	m.totalCacheMisses = 0
-	m.latencySum = 0
-	m.latencyCount = 0
-	m.minLatencyMs = -1
-	m.maxLatencyMs = 0
-	m.statusCodes = make(map[int]int64)
-	m.originRequests = make(map[string]int64)
-	m.originErrors = make(map[string]int64)
-}
-
-// TimingSample records timing information
-type TimingSample struct {
-	StartTime time.Time
-	EndTime   time.Time
-}
-
-func NewTimingSample() *TimingSample {
-	return &TimingSample{StartTime: time.Now()}
-}
-
-func (ts *TimingSample) End() {
-	ts.EndTime = time.Now()
-}
-
-func (ts *TimingSample) GetLatencyMs() float64 {
-	if ts.EndTime.IsZero() {
-		ts.EndTime = time.Now()
-	}
-	return ts.EndTime.Sub(ts.StartTime).Seconds() * 1000
 }

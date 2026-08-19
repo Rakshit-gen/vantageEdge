@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/google/uuid"
+	"github.com/vantageedge/backend/internal/eventbus"
 	"github.com/vantageedge/backend/internal/models"
 	"github.com/vantageedge/backend/internal/repository"
 	"github.com/vantageedge/backend/pkg/logger"
@@ -28,20 +29,25 @@ type CreateOriginRequest struct {
 	Weight              int       `json:"weight"`
 }
 
+// UpdateOriginRequest fields are pointers so PUT/PATCH only overwrites
+// fields the caller actually sent. The previous version used plain values,
+// so a partial PATCH body like {"weight": 50} silently reset Name/URL/
+// TimeoutSeconds to their JSON zero values, corrupting the origin.
 type UpdateOriginRequest struct {
-	Name           string `json:"name"`
-	URL            string `json:"url"`
-	TimeoutSeconds int    `json:"timeout_seconds"`
-	Weight         int    `json:"weight"`
+	Name           *string `json:"name"`
+	URL            *string `json:"url"`
+	TimeoutSeconds *int    `json:"timeout_seconds"`
+	Weight         *int    `json:"weight"`
 }
 
 type originService struct {
 	repos  *repository.Repository
+	hub    *eventbus.Hub
 	logger *logger.Logger
 }
 
-func NewOriginService(repos *repository.Repository, log *logger.Logger) OriginService {
-	return &originService{repos: repos, logger: log}
+func NewOriginService(repos *repository.Repository, hub *eventbus.Hub, log *logger.Logger) OriginService {
+	return &originService{repos: repos, hub: hub, logger: log}
 }
 
 func (s *originService) CreateOrigin(ctx context.Context, req *CreateOriginRequest) (*models.Origin, error) {
@@ -63,6 +69,7 @@ func (s *originService) CreateOrigin(ctx context.Context, req *CreateOriginReque
 	}
 
 	s.logger.Info().Str("origin_id", origin.ID.String()).Str("name", origin.Name).Msg("Origin created")
+	s.hub.Publish(origin.TenantID.String())
 	return origin, nil
 }
 
@@ -81,10 +88,18 @@ func (s *originService) UpdateOrigin(ctx context.Context, id uuid.UUID, req *Upd
 		return nil, err
 	}
 
-	origin.Name = req.Name
-	origin.URL = req.URL
-	origin.TimeoutSeconds = req.TimeoutSeconds
-	origin.Weight = req.Weight
+	if req.Name != nil {
+		origin.Name = *req.Name
+	}
+	if req.URL != nil {
+		origin.URL = *req.URL
+	}
+	if req.TimeoutSeconds != nil {
+		origin.TimeoutSeconds = *req.TimeoutSeconds
+	}
+	if req.Weight != nil {
+		origin.Weight = *req.Weight
+	}
 
 	if err := s.repos.Origin.Update(ctx, origin); err != nil {
 		s.logger.Error().Err(err).Str("origin_id", id.String()).Msg("Failed to update origin")
@@ -92,15 +107,22 @@ func (s *originService) UpdateOrigin(ctx context.Context, id uuid.UUID, req *Upd
 	}
 
 	s.logger.Info().Str("origin_id", id.String()).Msg("Origin updated")
+	s.hub.Publish(origin.TenantID.String())
 	return origin, nil
 }
 
 func (s *originService) DeleteOrigin(ctx context.Context, id uuid.UUID) error {
+	origin, err := s.repos.Origin.GetByID(ctx, id)
+	if err != nil {
+		return err
+	}
+
 	if err := s.repos.Origin.Delete(ctx, id); err != nil {
 		s.logger.Error().Err(err).Str("origin_id", id.String()).Msg("Failed to delete origin")
 		return err
 	}
 
 	s.logger.Info().Str("origin_id", id.String()).Msg("Origin deleted")
+	s.hub.Publish(origin.TenantID.String())
 	return nil
 }

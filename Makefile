@@ -109,9 +109,9 @@ dev: ## Run development environment
 	$(MAKE) migrate-up
 	$(MAKE) seed
 
-proto-gen: ## Generate gRPC code from proto files
-	protoc --go_out=. --go_opt=paths=source_relative \
-		--go-grpc_out=. --go-grpc_opt=paths=source_relative \
+proto-gen: ## Regenerate gRPC code from api/proto/*.proto (requires protoc, protoc-gen-go, protoc-gen-go-grpc)
+	protoc --go_out=. --go_opt=module=github.com/vantageedge/backend \
+		--go-grpc_out=. --go-grpc_opt=module=github.com/vantageedge/backend \
 		api/proto/*.proto
 
 openapi-gen: ## Generate OpenAPI documentation

@@ -12,9 +12,9 @@ import (
 
 type ConsistentHashBalancer struct {
 	mu    sync.RWMutex
-	ring  map[uint32]string     // hash -> origin_id
-	keys  []uint32              // sorted hashes
-	nodes map[string]int        // origin_id -> replica count
+	ring  map[uint32]string // hash -> origin_id
+	keys  []uint32          // sorted hashes
+	nodes map[string]int    // origin_id -> replica count
 }
 
 const defaultReplicas = 3

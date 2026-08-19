@@ -23,4 +23,3 @@ func New(db *database.DB) *Repository {
 		Request: NewRequestLogRepository(db),
 	}
 }
-

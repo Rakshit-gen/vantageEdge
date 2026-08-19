@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/vantageedge/backend/pkg/config"
@@ -49,8 +50,18 @@ func main() {
 		}
 		log.Info().Msg("Migrations completed successfully")
 	case "down":
-		log.Info().Msg("Rolling back migrations")
-		log.Warn().Msg("Migration rollback not implemented - handle manually")
+		steps := 1
+		if len(os.Args) > 2 {
+			n, err := strconv.Atoi(os.Args[2])
+			if err != nil || n < 1 {
+				log.Fatal().Str("arg", os.Args[2]).Msg("Usage: migrator down [n] (n must be a positive integer, default 1)")
+			}
+			steps = n
+		}
+		if err := runMigrationsDown(db, log, steps); err != nil {
+			log.Fatal().Err(err).Msg("Failed to roll back migrations")
+		}
+		log.Info().Msg("Rollback completed successfully")
 	default:
 		log.Fatal().Str("command", command).Msg("Unknown command")
 	}
@@ -128,7 +139,7 @@ func runMigrationsUp(db *database.DB, log *logger.Logger) error {
 	// Run pending migrations
 	for _, file := range migrationFiles {
 		version := strings.TrimSuffix(file, ".up.sql")
-		
+
 		if applied[version] {
 			log.Info().Str("version", version).Msg("Migration already applied, skipping")
 			continue
@@ -172,3 +183,72 @@ func runMigrationsUp(db *database.DB, log *logger.Logger) error {
 	return nil
 }
 
+// runMigrationsDown rolls back up to `steps` applied migrations, most
+// recent first, executing each corresponding .down.sql file. This was
+// previously a no-op ("handle manually") despite every migration already
+// shipping a .down.sql file, so `make migrate-down` silently did nothing —
+// a real hazard if someone ran it expecting an actual rollback (e.g.
+// during a bad deploy) and got no error, just no effect.
+func runMigrationsDown(db *database.DB, log *logger.Logger, steps int) error {
+	migrationsDir := "./migrations"
+	if dir := os.Getenv("MIGRATIONS_DIR"); dir != "" {
+		migrationsDir = dir
+	}
+
+	rows, err := db.Query("SELECT version FROM schema_migrations ORDER BY version DESC LIMIT $1", steps)
+	if err != nil {
+		return fmt.Errorf("failed to query applied migrations: %w", err)
+	}
+	var versions []string
+	for rows.Next() {
+		var version string
+		if err := rows.Scan(&version); err != nil {
+			rows.Close()
+			return err
+		}
+		versions = append(versions, version)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+
+	if len(versions) == 0 {
+		log.Warn().Msg("No applied migrations to roll back")
+		return nil
+	}
+
+	for _, version := range versions {
+		downFile := filepath.Join(migrationsDir, version+".down.sql")
+		sql, err := os.ReadFile(downFile)
+		if err != nil {
+			return fmt.Errorf("failed to read down migration for %s: %w", version, err)
+		}
+
+		log.Info().Str("version", version).Msg("Rolling back migration")
+
+		tx, err := db.Begin()
+		if err != nil {
+			return fmt.Errorf("failed to begin transaction: %w", err)
+		}
+
+		if _, err := tx.Exec(string(sql)); err != nil {
+			tx.Rollback()
+			return fmt.Errorf("failed to execute down migration %s: %w", version, err)
+		}
+
+		if _, err := tx.Exec("DELETE FROM schema_migrations WHERE version = $1", version); err != nil {
+			tx.Rollback()
+			return fmt.Errorf("failed to unrecord migration %s: %w", version, err)
+		}
+
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("failed to commit rollback of %s: %w", version, err)
+		}
+
+		log.Info().Str("version", version).Msg("Migration rolled back successfully")
+	}
+
+	return nil
+}

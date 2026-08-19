@@ -9,6 +9,7 @@ import (
 
 type APIKeyRepository interface {
 	Create(ctx context.Context, key *models.APIKey) error
+	GetByID(ctx context.Context, id uuid.UUID) (*models.APIKey, error)
 	GetByHash(ctx context.Context, hash string) (*models.APIKey, error)
 	ListByTenant(ctx context.Context, tenantID uuid.UUID) ([]*models.APIKey, error)
 	Update(ctx context.Context, key *models.APIKey) error
@@ -30,6 +31,13 @@ func (r *apiKeyRepository) Create(ctx context.Context, key *models.APIKey) error
 	return r.db.QueryRowContext(ctx, query,
 		key.TenantID, key.UserID, key.Name, key.KeyPrefix, key.KeyHash, key.Scopes, key.ExpiresAt).
 		Scan(&key.ID, &key.CreatedAt, &key.UpdatedAt)
+}
+
+func (r *apiKeyRepository) GetByID(ctx context.Context, id uuid.UUID) (*models.APIKey, error) {
+	var key models.APIKey
+	query := `SELECT * FROM api_keys WHERE id = $1`
+	err := r.db.GetContext(ctx, &key, query, id)
+	return &key, err
 }
 
 func (r *apiKeyRepository) GetByHash(ctx context.Context, hash string) (*models.APIKey, error) {
