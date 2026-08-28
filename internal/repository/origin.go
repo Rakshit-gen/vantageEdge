@@ -50,8 +50,10 @@ func (r *originRepository) Update(ctx context.Context, origin *models.Origin) er
 	// See the comment on routeRepository.Update: every user-editable column
 	// must be listed here or updates to it are silently dropped. Weight was
 	// previously missing despite UpdateOriginRequest accepting it.
-	query := `UPDATE origins SET name = $1, url = $2, timeout_seconds = $3, weight = $4 WHERE id = $5`
-	_, err := r.db.ExecContext(ctx, query, origin.Name, origin.URL, origin.TimeoutSeconds, origin.Weight, origin.ID)
+	query := `UPDATE origins SET name = $1, url = $2, health_check_path = $3, health_check_interval = $4,
+	          timeout_seconds = $5, max_retries = $6, weight = $7 WHERE id = $8`
+	_, err := r.db.ExecContext(ctx, query, origin.Name, origin.URL, origin.HealthCheckPath,
+		origin.HealthCheckInterval, origin.TimeoutSeconds, origin.MaxRetries, origin.Weight, origin.ID)
 	return err
 }
 

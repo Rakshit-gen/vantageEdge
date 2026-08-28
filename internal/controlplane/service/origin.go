@@ -34,10 +34,13 @@ type CreateOriginRequest struct {
 // so a partial PATCH body like {"weight": 50} silently reset Name/URL/
 // TimeoutSeconds to their JSON zero values, corrupting the origin.
 type UpdateOriginRequest struct {
-	Name           *string `json:"name"`
-	URL            *string `json:"url"`
-	TimeoutSeconds *int    `json:"timeout_seconds"`
-	Weight         *int    `json:"weight"`
+	Name                *string `json:"name"`
+	URL                 *string `json:"url"`
+	HealthCheckPath     *string `json:"health_check_path"`
+	HealthCheckInterval *int    `json:"health_check_interval"`
+	TimeoutSeconds      *int    `json:"timeout_seconds"`
+	MaxRetries          *int    `json:"max_retries"`
+	Weight              *int    `json:"weight"`
 }
 
 type originService struct {
@@ -94,8 +97,17 @@ func (s *originService) UpdateOrigin(ctx context.Context, id uuid.UUID, req *Upd
 	if req.URL != nil {
 		origin.URL = *req.URL
 	}
+	if req.HealthCheckPath != nil {
+		origin.HealthCheckPath = *req.HealthCheckPath
+	}
+	if req.HealthCheckInterval != nil {
+		origin.HealthCheckInterval = *req.HealthCheckInterval
+	}
 	if req.TimeoutSeconds != nil {
 		origin.TimeoutSeconds = *req.TimeoutSeconds
+	}
+	if req.MaxRetries != nil {
+		origin.MaxRetries = *req.MaxRetries
 	}
 	if req.Weight != nil {
 		origin.Weight = *req.Weight
