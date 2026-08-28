@@ -237,13 +237,32 @@ func (g *Gateway) proxyToOrigin(w http.ResponseWriter, r *http.Request, route *m
 
 	var lastErr error
 	var lastOrigin *models.Origin
+	tried := make(map[uuid.UUID]bool, len(pool))
 	for attempt := 0; attempt < attempts; attempt++ {
-		origin, err := loadbalancer.SelectWeighted(pool)
+		// Retry on a different origin than the ones already tried, so a
+		// failover actually moves off the bad origin. Fall back to the
+		// full pool once every member has failed (better to retry than
+		// give up while attempts remain).
+		candidates := pool
+		if len(tried) > 0 {
+			candidates = candidates[:0:0]
+			for _, o := range pool {
+				if !tried[o.ID] {
+					candidates = append(candidates, o)
+				}
+			}
+			if len(candidates) == 0 {
+				candidates = pool
+			}
+		}
+
+		origin, err := loadbalancer.SelectWeighted(candidates)
 		if err != nil {
 			lastErr = err
 			break
 		}
 		lastOrigin = origin
+		tried[origin.ID] = true
 
 		timeout := time.Duration(route.TimeoutSeconds) * time.Second
 		if timeout <= 0 {
