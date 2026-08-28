@@ -8,14 +8,15 @@ import (
 )
 
 type Service struct {
-	Tenant TenantService
-	User   UserService
-	Origin OriginService
-	Route  RouteService
-	APIKey APIKeyService
-	Auth   AuthService
-	Repos  *repository.Repository
-	logger *logger.Logger
+	Tenant    TenantService
+	User      UserService
+	Origin    OriginService
+	Route     RouteService
+	APIKey    APIKeyService
+	Auth      AuthService
+	Analytics AnalyticsService
+	Repos     *repository.Repository
+	logger    *logger.Logger
 }
 
 // New wires up every control-plane service. hub receives an event whenever
@@ -24,13 +25,14 @@ type Service struct {
 // internal/controlplane/grpcserver).
 func New(repos *repository.Repository, clerkClient *clerk.ClerkClient, hub *eventbus.Hub, log *logger.Logger) *Service {
 	return &Service{
-		Tenant: NewTenantService(repos, log),
-		User:   NewUserService(repos, log),
-		Origin: NewOriginService(repos, hub, log),
-		Route:  NewRouteService(repos, hub, log),
-		APIKey: NewAPIKeyService(repos, log),
-		Auth:   NewAuthService(repos, clerkClient, log),
-		Repos:  repos,
-		logger: log,
+		Tenant:    NewTenantService(repos, log),
+		User:      NewUserService(repos, log),
+		Origin:    NewOriginService(repos, hub, log),
+		Route:     NewRouteService(repos, hub, log),
+		APIKey:    NewAPIKeyService(repos, log),
+		Auth:      NewAuthService(repos, clerkClient, log),
+		Analytics: NewAnalyticsService(repos, log),
+		Repos:     repos,
+		logger:    log,
 	}
 }

@@ -34,6 +34,8 @@ func (h *Handlers) RegisterRoutes(r chi.Router) {
 	r.Put("/tenants/me", h.UpdateMyTenant)
 	r.Delete("/tenants/me", h.DeleteMyTenant)
 
+	r.Get("/analytics", h.GetAnalytics)
+
 	r.Route("/origins", func(r chi.Router) {
 		r.Post("/", h.CreateOrigin)
 		r.Get("/", h.ListOrigins)

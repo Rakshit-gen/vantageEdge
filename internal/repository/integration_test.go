@@ -212,3 +212,76 @@ func TestIntegration_APIKeyHashLookup(t *testing.T) {
 		t.Fatalf("expected usage_count to be incremented to 1, got %d", reloaded.UsageCount)
 	}
 }
+
+func TestIntegration_RequestLogAnalytics(t *testing.T) {
+	db := testDB(t)
+	repos := New(db)
+	ctx := context.Background()
+
+	tenant := &models.Tenant{
+		Name:      "Analytics Test Tenant",
+		Subdomain: "it-" + uuid.NewString()[:8],
+		Status:    "active",
+		Settings:  models.JSONB{},
+	}
+	if err := repos.Tenant.Create(ctx, tenant); err != nil {
+		t.Fatalf("Tenant.Create: %v", err)
+	}
+	t.Cleanup(func() { _ = repos.Tenant.Delete(context.Background(), tenant.ID) })
+
+	// 3 OK on /a (one a cache hit), 1 500 on /b, 1 404 on /a.
+	logs := []*models.RequestLog{
+		{Method: "GET", Path: "/a", StatusCode: 200, ResponseTimeMs: 10, CacheHit: true},
+		{Method: "GET", Path: "/a", StatusCode: 200, ResponseTimeMs: 20},
+		{Method: "GET", Path: "/a", StatusCode: 200, ResponseTimeMs: 30},
+		{Method: "GET", Path: "/a", StatusCode: 404, ResponseTimeMs: 5},
+		{Method: "POST", Path: "/b", StatusCode: 500, ResponseTimeMs: 100},
+	}
+	for _, l := range logs {
+		l.TenantID = tenant.ID
+		if err := repos.Request.Create(ctx, l); err != nil {
+			t.Fatalf("Request.Create: %v", err)
+		}
+	}
+
+	since := time.Now().Add(-time.Hour)
+
+	sum, err := repos.Request.Summary(ctx, tenant.ID, since)
+	if err != nil {
+		t.Fatalf("Summary: %v", err)
+	}
+	if sum.TotalRequests != 5 || sum.ErrorRequests != 2 || sum.CacheHits != 1 {
+		t.Fatalf("Summary rollup wrong: %+v", sum)
+	}
+	if sum.AvgLatencyMs != 33 { // (10+20+30+5+100)/5
+		t.Fatalf("Summary avg latency: got %v, want 33", sum.AvgLatencyMs)
+	}
+
+	series, err := repos.Request.TimeSeries(ctx, tenant.ID, since, "hour")
+	if err != nil {
+		t.Fatalf("TimeSeries: %v", err)
+	}
+	var seriesTotal int64
+	for _, b := range series {
+		seriesTotal += b.Count
+	}
+	if seriesTotal != 5 {
+		t.Fatalf("TimeSeries counts should sum to 5, got %d across %d buckets", seriesTotal, len(series))
+	}
+
+	status, err := repos.Request.StatusBreakdown(ctx, tenant.ID, since)
+	if err != nil {
+		t.Fatalf("StatusBreakdown: %v", err)
+	}
+	if status[200] != 3 || status[404] != 1 || status[500] != 1 {
+		t.Fatalf("StatusBreakdown wrong: %v", status)
+	}
+
+	top, err := repos.Request.TopRoutes(ctx, tenant.ID, since, 10)
+	if err != nil {
+		t.Fatalf("TopRoutes: %v", err)
+	}
+	if len(top) != 2 || top[0].Path != "/a" || top[0].Count != 4 || top[0].ErrorCount != 1 {
+		t.Fatalf("TopRoutes wrong: %+v", top)
+	}
+}

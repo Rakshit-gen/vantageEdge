@@ -168,6 +168,21 @@ curl -X POST http://localhost:8080/api/v1/api-keys \
   }'
 ```
 
+#### Analytics
+
+**Traffic rollup for the authenticated tenant** (aggregated from `request_logs`)
+```bash
+curl "http://localhost:8080/api/v1/analytics?window=24h" \
+  -H "Authorization: Bearer <clerk_jwt>"
+# window ∈ {1h, 24h, 7d, 30d} (default 24h). Returns:
+#   { window, generated_at,
+#     totals: { total_requests, error_rate, cache_hit_rate,
+#               rate_limited_count, avg_latency_ms, p95_latency_ms },
+#     series: [ { ts, count, avg_latency_ms, error_count } ],   # hourly ≤24h, else daily
+#     status_breakdown: { "200": n, ... },
+#     top_routes: [ { path, count, avg_latency_ms, error_count } ] }
+```
+
 ### Gateway API (Port 8000)
 
 **Make Request Through Gateway**
