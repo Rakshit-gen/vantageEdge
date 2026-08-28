@@ -85,12 +85,16 @@ func (r *routeRepository) Update(ctx context.Context, route *models.Route) error
 	// old value).
 	query := `UPDATE routes SET name = $1, path_pattern = $2, methods = $3, priority = $4,
 	          auth_mode = $5, is_active = $6, rate_limit_enabled = $7,
-	          rate_limit_requests_per_second = $8, cache_enabled = $9, cache_ttl_seconds = $10
-	          WHERE id = $11`
+	          rate_limit_requests_per_second = $8, rate_limit_burst = $9, rate_limit_key_strategy = $10,
+	          cache_enabled = $11, cache_ttl_seconds = $12, cache_key_pattern = $13,
+	          timeout_seconds = $14, retry_attempts = $15
+	          WHERE id = $16`
 	_, err := r.db.ExecContext(ctx, query,
 		route.Name, route.PathPattern, route.Methods, route.Priority,
 		route.AuthMode, route.IsActive, route.RateLimitEnabled,
-		route.RateLimitRequestsPerSecond, route.CacheEnabled, route.CacheTTLSeconds, route.ID)
+		route.RateLimitRequestsPerSecond, route.RateLimitBurst, route.RateLimitKeyStrategy,
+		route.CacheEnabled, route.CacheTTLSeconds, route.CacheKeyPattern,
+		route.TimeoutSeconds, route.RetryAttempts, route.ID)
 	return err
 }
 

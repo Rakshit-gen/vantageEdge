@@ -56,8 +56,13 @@ type UpdateRouteRequest struct {
 	IsActive                   *bool    `json:"is_active"`
 	RateLimitEnabled           *bool    `json:"rate_limit_enabled"`
 	RateLimitRequestsPerSecond *int     `json:"rate_limit_requests_per_second"`
+	RateLimitBurst             *int     `json:"rate_limit_burst"`
+	RateLimitKeyStrategy       *string  `json:"rate_limit_key_strategy"`
 	CacheEnabled               *bool    `json:"cache_enabled"`
 	CacheTTLSeconds            *int     `json:"cache_ttl_seconds"`
+	CacheKeyPattern            *string  `json:"cache_key_pattern"`
+	TimeoutSeconds             *int     `json:"timeout_seconds"`
+	RetryAttempts              *int     `json:"retry_attempts"`
 }
 
 type routeService struct {
@@ -141,11 +146,26 @@ func (s *routeService) UpdateRoute(ctx context.Context, id uuid.UUID, req *Updat
 	if req.RateLimitRequestsPerSecond != nil {
 		route.RateLimitRequestsPerSecond = *req.RateLimitRequestsPerSecond
 	}
+	if req.RateLimitBurst != nil {
+		route.RateLimitBurst = *req.RateLimitBurst
+	}
+	if req.RateLimitKeyStrategy != nil {
+		route.RateLimitKeyStrategy = *req.RateLimitKeyStrategy
+	}
 	if req.CacheEnabled != nil {
 		route.CacheEnabled = *req.CacheEnabled
 	}
 	if req.CacheTTLSeconds != nil {
 		route.CacheTTLSeconds = *req.CacheTTLSeconds
+	}
+	if req.CacheKeyPattern != nil {
+		route.CacheKeyPattern = *req.CacheKeyPattern
+	}
+	if req.TimeoutSeconds != nil {
+		route.TimeoutSeconds = *req.TimeoutSeconds
+	}
+	if req.RetryAttempts != nil {
+		route.RetryAttempts = *req.RetryAttempts
 	}
 
 	if err := s.repos.Route.Update(ctx, route); err != nil {
