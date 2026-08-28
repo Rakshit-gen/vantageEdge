@@ -9,10 +9,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/vantageedge/backend/api/proto/configpb"
-	"github.com/vantageedge/backend/internal/gateway/configclient"
 	"github.com/vantageedge/backend/internal/models"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 // ErrNoMatchingRoute is returned when no active route matches the request.
@@ -40,12 +37,12 @@ type tenantConfig struct {
 	origins  map[uuid.UUID][]*models.Origin // routeID -> pool
 }
 
-// ConfigCache fetches tenant/route/origin config from the control plane's
-// gRPC ConfigService and caches it (short TTL as a fallback, invalidated
-// immediately on the control plane's push stream) instead of the gateway
-// querying Postgres directly on every request.
+// ConfigCache fetches tenant/route/origin config from a ConfigSource and
+// caches it per subdomain with a short TTL, so the gateway isn't hitting
+// the source on every request. When the source supports push invalidation
+// (the gRPC source does), Invalidate drops a stale entry ahead of its TTL.
 type ConfigCache struct {
-	client *configclient.Client
+	source ConfigSource
 	ttl    time.Duration
 
 	mu             sync.RWMutex
@@ -58,12 +55,12 @@ type configCacheEntry struct {
 	expiresAt time.Time
 }
 
-func NewConfigCache(client *configclient.Client, ttl time.Duration) *ConfigCache {
+func NewConfigCache(source ConfigSource, ttl time.Duration) *ConfigCache {
 	if ttl <= 0 {
 		ttl = 5 * time.Second
 	}
 	return &ConfigCache{
-		client:         client,
+		source:         source,
 		ttl:            ttl,
 		bySubdomain:    make(map[string]configCacheEntry),
 		subdomainByTID: make(map[string]string),
@@ -91,14 +88,7 @@ func (c *ConfigCache) get(ctx context.Context, subdomain string) (*tenantConfig,
 		return entry.config, nil
 	}
 
-	pbConfig, err := c.client.GetTenantConfig(ctx, subdomain)
-	if err != nil {
-		if status.Code(err) == codes.NotFound {
-			return nil, ErrTenantNotFound
-		}
-		return nil, fmt.Errorf("failed to fetch tenant config: %w", err)
-	}
-	cfg, err := toTenantConfig(pbConfig)
+	cfg, err := c.source.Fetch(ctx, subdomain)
 	if err != nil {
 		return nil, err
 	}

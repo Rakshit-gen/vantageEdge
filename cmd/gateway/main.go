@@ -100,7 +100,7 @@ func main() {
 		log.Fatal().Err(err).Msg("Failed to create control plane config client")
 	}
 	defer configClient.Close()
-	configCache := router.NewConfigCache(configClient, 5*time.Second)
+	configCache := router.NewConfigCache(router.NewGRPCSource(configClient), 5*time.Second)
 	go configClient.WatchInvalidations(rootCtx, configCache.Invalidate)
 
 	handler := router.New(cfg, repos, router.Deps{

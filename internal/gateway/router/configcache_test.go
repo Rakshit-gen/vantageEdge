@@ -57,7 +57,7 @@ func newTestConfigCache(t *testing.T, configs map[string]*configpb.TenantConfig)
 	// there's no real address to dial in-memory.
 	client := configclient.NewClientFromConn(conn, logger.New("error", "json"))
 
-	return NewConfigCache(client, time.Minute)
+	return NewConfigCache(NewGRPCSource(client), time.Minute)
 }
 
 func TestConfigCache_MatchesHighestPriorityRoute(t *testing.T) {
@@ -164,7 +164,7 @@ func TestConfigCache_Invalidate_ForcesRefetch(t *testing.T) {
 
 	// Long TTL: without invalidation, a second Match within the TTL window
 	// must NOT see the route added below.
-	cache := NewConfigCache(client, time.Hour)
+	cache := NewConfigCache(NewGRPCSource(client), time.Hour)
 
 	if _, _, _, err := cache.Match(context.Background(), "acme", "/api/hello", "GET"); err != ErrNoMatchingRoute {
 		t.Fatalf("expected no route on first fetch, got %v", err)
