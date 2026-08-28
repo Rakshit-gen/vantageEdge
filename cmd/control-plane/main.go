@@ -97,6 +97,7 @@ func main() {
 	})
 
 	r.Route("/api/v1", func(r chi.Router) {
+		r.Use(cpmiddleware.LimitBody)
 		r.Use(cpmiddleware.RequireAuth(jwtValidator, svc.Auth, log))
 		h.RegisterRoutes(r)
 	})
