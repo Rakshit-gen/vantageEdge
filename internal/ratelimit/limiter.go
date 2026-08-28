@@ -90,6 +90,9 @@ func NewRedisLimiter(client *redispkg.Client) *RedisLimiter {
 }
 
 func (l *RedisLimiter) Allow(ctx context.Context, key string, rps float64, burst int) (Result, error) {
+	if rps <= 0 {
+		rps = 1 // guard: rps is divided by below and in the Lua refill
+	}
 	if burst <= 0 {
 		burst = 1
 	}
@@ -159,6 +162,9 @@ func NewMemoryLimiter() *MemoryLimiter {
 }
 
 func (l *MemoryLimiter) Allow(_ context.Context, key string, rps float64, burst int) (Result, error) {
+	if rps <= 0 {
+		rps = 1
+	}
 	if burst <= 0 {
 		burst = 1
 	}
