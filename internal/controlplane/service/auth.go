@@ -43,25 +43,41 @@ func NewAuthService(repos *repository.Repository, clerkClient *clerk.ClerkClient
 	return &authService{repos: repos, clerkClient: clerkClient, logger: log}
 }
 
+func strPtrEqual(a, b *string) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
+}
+
 func (s *authService) SyncUser(ctx context.Context, req *SyncUserRequest) (*models.User, error) {
 	if req.ClerkUserID == "" {
 		return nil, fmt.Errorf("clerk_user_id is required")
 	}
 
-	// Try to get existing user
+	// Try to get existing user. SyncUser runs on every authenticated
+	// request (RequireAuth middleware), so the common path here must not
+	// write: only persist when a field actually changed.
 	existingUser, err := s.repos.User.GetByClerkID(ctx, req.ClerkUserID)
 	if err == nil {
-		// User exists, update if needed
-		existingUser.Email = req.Email
-		if req.FirstName != nil {
+		changed := false
+		if req.Email != "" && req.Email != existingUser.Email {
+			existingUser.Email = req.Email
+			changed = true
+		}
+		if req.FirstName != nil && !strPtrEqual(req.FirstName, existingUser.FirstName) {
 			existingUser.FirstName = req.FirstName
+			changed = true
 		}
-		if req.LastName != nil {
+		if req.LastName != nil && !strPtrEqual(req.LastName, existingUser.LastName) {
 			existingUser.LastName = req.LastName
+			changed = true
 		}
-		if err := s.repos.User.Update(ctx, existingUser); err != nil {
-			s.logger.Error().Err(err).Str("clerk_user_id", req.ClerkUserID).Msg("Failed to update user")
-			return nil, err
+		if changed {
+			if err := s.repos.User.Update(ctx, existingUser); err != nil {
+				s.logger.Error().Err(err).Str("clerk_user_id", req.ClerkUserID).Msg("Failed to update user")
+				return nil, err
+			}
 		}
 		return existingUser, nil
 	}
