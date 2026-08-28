@@ -105,6 +105,12 @@ func main() {
 	server := &http.Server{
 		Addr:    addr,
 		Handler: otelhttp.NewHandler(r, "control-plane"),
+		// ReadHeaderTimeout bounds a slow-header (Slowloris) client; the
+		// per-request deadline is chi's Timeout middleware above, so no
+		// WriteTimeout here (it would fight that and cut long handlers).
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		IdleTimeout:       120 * time.Second,
 	}
 
 	metrics := observability.NewMetrics("vantageedge_controlplane")
