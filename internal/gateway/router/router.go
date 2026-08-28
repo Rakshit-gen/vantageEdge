@@ -128,7 +128,7 @@ func (g *Gateway) handleRequest(w http.ResponseWriter, r *http.Request) {
 	defer span.End()
 	r = r.WithContext(ctx)
 
-	subdomain, err := subdomainFromHost(r.Host)
+	subdomain, err := resolveSubdomain(r)
 	if err != nil {
 		g.logger.Warn().Err(err).Str("host", r.Host).Msg("Failed to resolve tenant")
 		http.Error(w, "Unknown tenant", http.StatusNotFound)
@@ -362,6 +362,21 @@ func (g *Gateway) rateLimitKey(r *http.Request, route *models.Route, tenantID uu
 		}
 		return fmt.Sprintf("%s:%s:%s", tenantID, route.ID, who)
 	}
+}
+
+// resolveSubdomain picks the tenant subdomain for a request. An explicit
+// X-Tenant-Subdomain header wins — for callers that can't put the tenant
+// in the Host, such as a managed platform that terminates every route on
+// one hostname, or curl against the raw gateway URL. Otherwise it's the
+// first label of the Host. The resolved tenant is still subject to
+// per-route auth (middleware.Authenticate rejects a JWT or API key
+// belonging to another tenant), so the header can't reach a tenant's
+// protected routes.
+func resolveSubdomain(r *http.Request) (string, error) {
+	if s := r.Header.Get("X-Tenant-Subdomain"); s != "" {
+		return s, nil
+	}
+	return subdomainFromHost(r.Host)
 }
 
 func subdomainFromHost(host string) (string, error) {
