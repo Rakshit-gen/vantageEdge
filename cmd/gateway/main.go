@@ -92,16 +92,26 @@ func main() {
 	metrics := observability.NewMetrics("vantageedge_gateway")
 	healthChecker := loadbalancer.NewHealthChecker(log, cfg.LoadBalancer.HealthCheckInterval)
 
-	// The gateway's tenant/route/origin config comes from the control
-	// plane's gRPC ConfigService, not direct Postgres reads (repos above
-	// is kept only for the request-log write path).
-	configClient, err := configclient.NewClient(cfg.Gateway.ControlPlaneGRPCAddr, log)
-	if err != nil {
-		log.Fatal().Err(err).Msg("Failed to create control plane config client")
+	// Tenant/route/origin config comes from the control plane's gRPC
+	// ConfigService when CONTROL_PLANE_GRPC_ADDR is set (with push
+	// invalidation), otherwise straight from Postgres on a short TTL — the
+	// latter for single-port hosts where the control plane's gRPC port
+	// isn't reachable from the gateway. repos is already open for the
+	// request-log write path either way.
+	var configCache *router.ConfigCache
+	if addr := cfg.Gateway.ControlPlaneGRPCAddr; addr != "" {
+		configClient, err := configclient.NewClient(addr, log)
+		if err != nil {
+			log.Fatal().Err(err).Msg("Failed to create control plane config client")
+		}
+		defer configClient.Close()
+		configCache = router.NewConfigCache(router.NewGRPCSource(configClient), 5*time.Second)
+		go configClient.WatchInvalidations(rootCtx, configCache.Invalidate)
+		log.Info().Str("addr", addr).Msg("Config source: control plane gRPC")
+	} else {
+		configCache = router.NewConfigCache(router.NewDBSource(repos), 5*time.Second)
+		log.Info().Msg("Config source: direct database (TTL only, no push invalidation)")
 	}
-	defer configClient.Close()
-	configCache := router.NewConfigCache(router.NewGRPCSource(configClient), 5*time.Second)
-	go configClient.WatchInvalidations(rootCtx, configCache.Invalidate)
 
 	handler := router.New(cfg, repos, router.Deps{
 		ConfigCache:   configCache,

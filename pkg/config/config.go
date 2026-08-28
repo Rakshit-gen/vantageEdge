@@ -39,10 +39,9 @@ type GatewayConfig struct {
 	Port   int
 	Domain string
 	// ControlPlaneGRPCAddr is where the gateway's config client dials the
-	// control plane's ConfigService (see api/proto/config.proto). Previously
-	// docker-compose set an env var for this (CONTROL_PLANE_GRPC) that
-	// nothing in the code ever read — the gateway only ever talked to
-	// Postgres directly.
+	// control plane's ConfigService (see api/proto/config.proto). When
+	// empty, the gateway reads tenant config straight from Postgres
+	// instead (see cmd/gateway and internal/gateway/router/dbsource.go).
 	ControlPlaneGRPCAddr string
 }
 
@@ -130,7 +129,7 @@ func Load() (*Config, error) {
 			Host:                 getEnv("GATEWAY_HOST", "0.0.0.0"),
 			Port:                 getEnvAsInt("GATEWAY_PORT", 8000),
 			Domain:               getEnv("GATEWAY_DOMAIN", "vantageedge.dev"),
-			ControlPlaneGRPCAddr: getEnv("CONTROL_PLANE_GRPC_ADDR", "control-plane:9090"),
+			ControlPlaneGRPCAddr: getEnv("CONTROL_PLANE_GRPC_ADDR", ""),
 		},
 		Database: DatabaseConfig{
 			Host:               getEnv("DB_HOST", "localhost"),
