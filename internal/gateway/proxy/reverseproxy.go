@@ -26,9 +26,34 @@ func NewReverseProxy(maxTimeout time.Duration) *ReverseProxy {
 	if maxTimeout <= 0 {
 		maxTimeout = 60 * time.Second
 	}
+	// The default transport keeps only 2 idle connections per host, which
+	// throttles a gateway that funnels most traffic to a handful of
+	// origins into constant connection churn (and ephemeral-port
+	// exhaustion under load). Raise the pool and set explicit dial/handshake
+	// timeouts so a slow origin can't tie a request up past its deadline.
+	transport := &http.Transport{
+		Proxy: http.ProxyFromEnvironment,
+		DialContext: (&net.Dialer{
+			Timeout:   10 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          200,
+		MaxIdleConnsPerHost:   100,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+	}
 	return &ReverseProxy{
 		client: &http.Client{
-			Timeout: maxTimeout,
+			Timeout:   maxTimeout,
+			Transport: transport,
+			// A gateway forwards the origin's 3xx to the caller verbatim;
+			// it must not chase Location itself (wrong body/status, and a
+			// redirect to an internal address would be an SSRF vector).
+			CheckRedirect: func(*http.Request, []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
 		},
 	}
 }
@@ -101,7 +126,18 @@ func (rp *ReverseProxy) ProxyRequest(
 	} else {
 		proxyReq.Header.Set("X-Forwarded-For", clientIP)
 	}
-	proxyReq.Header.Set("X-Forwarded-Proto", req.Proto)
+	// X-Forwarded-Proto is the request scheme (http/https), not the HTTP
+	// version. Trust an inbound value first (the TLS-terminating load
+	// balancer in front of the gateway sets it), then fall back to whether
+	// this hop itself is TLS.
+	proto := req.Header.Get("X-Forwarded-Proto")
+	if proto == "" {
+		proto = "http"
+		if req.TLS != nil {
+			proto = "https"
+		}
+	}
+	proxyReq.Header.Set("X-Forwarded-Proto", proto)
 	proxyReq.Header.Set("X-Forwarded-Host", req.Host)
 
 	// Propagate the gateway's trace context so an OTel-instrumented origin
@@ -133,11 +169,50 @@ func (rp *ReverseProxy) WriteResponse(w http.ResponseWriter, resp *http.Response
 	// Write status code
 	w.WriteHeader(resp.StatusCode)
 
-	// Copy body
-	_, err := io.Copy(w, resp.Body)
-	resp.Body.Close()
+	defer resp.Body.Close()
 
+	// Server-Sent Events (and any body the origin sends without a length)
+	// must reach the caller as they arrive; a plain io.Copy buffers them
+	// until the connection closes, which for an event stream is never.
+	if isStreaming(resp) {
+		return copyAndFlush(w, resp.Body)
+	}
+
+	_, err := io.Copy(w, resp.Body)
 	return err
+}
+
+// isStreaming reports whether a response should be flushed to the client
+// incrementally rather than copied in one shot.
+func isStreaming(resp *http.Response) bool {
+	if strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream") {
+		return true
+	}
+	// ContentLength -1 means the origin did not declare a length (chunked
+	// or streamed); a known length is a bounded body that io.Copy handles.
+	return resp.ContentLength < 0
+}
+
+// copyAndFlush streams src to w, flushing after every chunk so the caller
+// sees data without waiting for the whole body.
+func copyAndFlush(w http.ResponseWriter, src io.Reader) error {
+	rc := http.NewResponseController(w)
+	buf := make([]byte, 32*1024)
+	for {
+		n, rerr := src.Read(buf)
+		if n > 0 {
+			if _, werr := w.Write(buf[:n]); werr != nil {
+				return werr
+			}
+			rc.Flush() // best effort: ErrNotSupported is harmless here
+		}
+		if rerr != nil {
+			if rerr == io.EOF {
+				return nil
+			}
+			return rerr
+		}
+	}
 }
 
 // PathRewrite handles path rewriting rules
