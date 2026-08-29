@@ -140,7 +140,7 @@ func newTestHarness(t *testing.T) *testHarness {
 	// Short TTL: tests seed data via the repository directly and then hit
 	// the gateway immediately, so the cache must not serve a pre-seed miss
 	// for the default 5s window.
-	configCache := NewConfigCache(configClient, 50*time.Millisecond)
+	configCache := NewConfigCache(NewGRPCSource(configClient), 50*time.Millisecond)
 
 	cfg := &config.Config{
 		RateLimit:    config.RateLimitConfig{DefaultRPS: 100, DefaultBurst: 200},
