@@ -77,6 +77,14 @@ func (rp *ReverseProxy) ProxyRequest(
 	proxyReq.URL = parsedURL
 	proxyReq.RequestURI = ""
 
+	// Send the origin's host in the Host header, not the gateway's inbound
+	// host. req.Clone copies the caller's Host (e.g. the tenant subdomain
+	// or the gateway's own domain), and any origin that virtual-hosts —
+	// most SaaS backends, httpbin, anything behind a shared proxy — 404s or
+	// misroutes on an unrecognised Host. The caller's original host is
+	// still forwarded as X-Forwarded-Host below.
+	proxyReq.Host = parsedURL.Host
+
 	// Remove hop-by-hop headers
 	removeHopByHopHeaders(proxyReq)
 
