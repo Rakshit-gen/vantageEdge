@@ -157,6 +157,7 @@ func toTenantConfig(pb *configpb.TenantConfig) (*tenantConfig, error) {
 			CacheKeyPattern:            r.CacheKeyPattern,
 			TimeoutSeconds:             int(r.TimeoutSeconds),
 			RetryAttempts:              int(r.RetryAttempts),
+			LoadBalancing:              r.LoadBalancing,
 		})
 
 		origins := make([]*models.Origin, 0, len(r.Origins))

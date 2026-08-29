@@ -218,8 +218,8 @@ func (g *Gateway) handleRequest(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// proxyToOrigin load-balances across pool, weighted by each origin's
-// Weight column (internal/loadbalancer.SelectWeighted). Each retry
+// proxyToOrigin load-balances across pool according to route.LoadBalancing
+// ("weighted" default, "round_robin", "least_conn", "ip_hash"). Each retry
 // attempt re-selects from the pool rather than hammering the same origin
 // again, so a transient failure on one origin fails over to another
 // healthy pool member when one exists.
@@ -256,7 +256,7 @@ func (g *Gateway) proxyToOrigin(w http.ResponseWriter, r *http.Request, route *m
 			}
 		}
 
-		origin, err := loadbalancer.SelectWeighted(candidates)
+		origin, err := loadbalancer.Select(route.LoadBalancing, route.ID, clientIP(r), candidates)
 		if err != nil {
 			lastErr = err
 			break
@@ -269,8 +269,10 @@ func (g *Gateway) proxyToOrigin(w http.ResponseWriter, r *http.Request, route *m
 			timeout = time.Duration(origin.TimeoutSeconds) * time.Second
 		}
 
+		loadbalancer.AddConn(origin.ID)
 		resp, cancel, err := g.proxy.ProxyRequest(r.Context(), r, origin, nil, timeout)
 		if err != nil {
+			loadbalancer.DoneConn(origin.ID)
 			lastErr = err
 			continue
 		}
@@ -281,6 +283,7 @@ func (g *Gateway) proxyToOrigin(w http.ResponseWriter, r *http.Request, route *m
 			g.proxy.WriteResponse(w, resp)
 		}
 		cancel()
+		loadbalancer.DoneConn(origin.ID)
 		return resp.StatusCode
 	}
 

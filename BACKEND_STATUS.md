@@ -132,7 +132,7 @@
 4. **Load Balancing**
    - Origin pool management
    - Health check scheduler
-   - Weighted round robin
+   - Per-route strategy: weighted, round_robin, least_conn, ip_hash
    - Connection pooling
 
 ### Medium Priority

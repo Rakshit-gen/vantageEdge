@@ -67,6 +67,9 @@ message RouteConfig {
   int32 retry_attempts = 15;
 
   repeated OriginConfig origins = 16;
+
+  // weighted (default) | round_robin | least_conn | ip_hash
+  string load_balancing = 17;
 }
 
 message OriginConfig {

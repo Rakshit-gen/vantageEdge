@@ -231,8 +231,10 @@ type RouteConfig struct {
 	TimeoutSeconds             int32                  `protobuf:"varint,14,opt,name=timeout_seconds,json=timeoutSeconds,proto3" json:"timeout_seconds,omitempty"`
 	RetryAttempts              int32                  `protobuf:"varint,15,opt,name=retry_attempts,json=retryAttempts,proto3" json:"retry_attempts,omitempty"`
 	Origins                    []*OriginConfig        `protobuf:"bytes,16,rep,name=origins,proto3" json:"origins,omitempty"`
-	unknownFields              protoimpl.UnknownFields
-	sizeCache                  protoimpl.SizeCache
+	// weighted (default) | round_robin | least_conn | ip_hash
+	LoadBalancing string `protobuf:"bytes,17,opt,name=load_balancing,json=loadBalancing,proto3" json:"load_balancing,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *RouteConfig) Reset() {
@@ -377,6 +379,13 @@ func (x *RouteConfig) GetOrigins() []*OriginConfig {
 	return nil
 }
 
+func (x *RouteConfig) GetLoadBalancing() string {
+	if x != nil {
+		return x.LoadBalancing
+	}
+	return ""
+}
+
 type OriginConfig struct {
 	state           protoimpl.MessageState `protogen:"open.v1"`
 	Id              string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
@@ -467,7 +476,7 @@ const file_api_proto_config_proto_rawDesc = "" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x1c\n" +
 	"\tsubdomain\x18\x02 \x01(\tR\tsubdomain\x12\x16\n" +
 	"\x06status\x18\x03 \x01(\tR\x06status\x12:\n" +
-	"\x06routes\x18\x04 \x03(\v2\".vantageedge.config.v1.RouteConfigR\x06routes\"\x86\x05\n" +
+	"\x06routes\x18\x04 \x03(\v2\".vantageedge.config.v1.RouteConfigR\x06routes\"\xad\x05\n" +
 	"\vRouteConfig\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12!\n" +
@@ -485,7 +494,8 @@ const file_api_proto_config_proto_rawDesc = "" +
 	"\x11cache_key_pattern\x18\r \x01(\tR\x0fcacheKeyPattern\x12'\n" +
 	"\x0ftimeout_seconds\x18\x0e \x01(\x05R\x0etimeoutSeconds\x12%\n" +
 	"\x0eretry_attempts\x18\x0f \x01(\x05R\rretryAttempts\x12=\n" +
-	"\aorigins\x18\x10 \x03(\v2#.vantageedge.config.v1.OriginConfigR\aorigins\"\x9d\x01\n" +
+	"\aorigins\x18\x10 \x03(\v2#.vantageedge.config.v1.OriginConfigR\aorigins\x12%\n" +
+	"\x0eload_balancing\x18\x11 \x01(\tR\rloadBalancing\"\x9d\x01\n" +
 	"\fOriginConfig\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x10\n" +
 	"\x03url\x18\x02 \x01(\tR\x03url\x12\x16\n" +

@@ -43,6 +43,20 @@ type CreateRouteRequest struct {
 	CacheKeyPattern            string    `json:"cache_key_pattern"`
 	TimeoutSeconds             int       `json:"timeout_seconds"`
 	RetryAttempts              int       `json:"retry_attempts"`
+	LoadBalancing              string    `json:"load_balancing"`
+}
+
+// loadBalancingStrategies is the set accepted on a route. "weighted" is the
+// default and matches the gateway's prior fixed behaviour.
+var loadBalancingStrategies = map[string]bool{
+	"weighted": true, "round_robin": true, "least_conn": true, "ip_hash": true,
+}
+
+func validLoadBalancing(s string) error {
+	if !loadBalancingStrategies[s] {
+		return fmt.Errorf("invalid load_balancing %q (want weighted, round_robin, least_conn, or ip_hash)", s)
+	}
+	return nil
 }
 
 // UpdateRouteRequest fields are pointers so PUT/PATCH only overwrites
@@ -63,6 +77,7 @@ type UpdateRouteRequest struct {
 	CacheKeyPattern            *string  `json:"cache_key_pattern"`
 	TimeoutSeconds             *int     `json:"timeout_seconds"`
 	RetryAttempts              *int     `json:"retry_attempts"`
+	LoadBalancing              *string  `json:"load_balancing"`
 }
 
 type routeService struct {
@@ -76,6 +91,12 @@ func NewRouteService(repos *repository.Repository, hub *eventbus.Hub, log *logge
 }
 
 func (s *routeService) CreateRoute(ctx context.Context, req *CreateRouteRequest) (*models.Route, error) {
+	if req.LoadBalancing == "" {
+		req.LoadBalancing = "weighted"
+	}
+	if err := validLoadBalancing(req.LoadBalancing); err != nil {
+		return nil, err
+	}
 	route := &models.Route{
 		TenantID:                   req.TenantID,
 		OriginID:                   req.OriginID,
@@ -94,6 +115,7 @@ func (s *routeService) CreateRoute(ctx context.Context, req *CreateRouteRequest)
 		CacheKeyPattern:            req.CacheKeyPattern,
 		TimeoutSeconds:             req.TimeoutSeconds,
 		RetryAttempts:              req.RetryAttempts,
+		LoadBalancing:              req.LoadBalancing,
 		Metadata:                   models.JSONB{},
 	}
 
@@ -166,6 +188,12 @@ func (s *routeService) UpdateRoute(ctx context.Context, id uuid.UUID, req *Updat
 	}
 	if req.RetryAttempts != nil {
 		route.RetryAttempts = *req.RetryAttempts
+	}
+	if req.LoadBalancing != nil {
+		if err := validLoadBalancing(*req.LoadBalancing); err != nil {
+			return nil, err
+		}
+		route.LoadBalancing = *req.LoadBalancing
 	}
 
 	if err := s.repos.Route.Update(ctx, route); err != nil {

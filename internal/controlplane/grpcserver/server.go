@@ -108,6 +108,7 @@ func toRouteConfig(route *models.Route, origins []*models.Origin) *configpb.Rout
 		CacheKeyPattern:            route.CacheKeyPattern,
 		TimeoutSeconds:             int32(route.TimeoutSeconds),
 		RetryAttempts:              int32(route.RetryAttempts),
+		LoadBalancing:              route.LoadBalancing,
 		Origins:                    pbOrigins,
 	}
 }

@@ -9,7 +9,7 @@ The backend consists of 6 core components:
 1. **Control Plane Service** - Configuration and tenant management (REST API for operators, gRPC for the gateway)
 2. **Authentication Layer** - Clerk integration and identity management
 3. **API Gateway** - Request routing and traffic management
-4. **Load Balancer** - Weighted, health-aware traffic distribution across a route's origin pool
+4. **Load Balancer** - Health-aware traffic distribution across a route's origin pool, per-route strategy (`weighted`, `round_robin`, `least_conn`, `ip_hash`)
 5. **Distributed Cache** - Redis-backed response cache and rate limiter, shared across gateway replicas
 6. **Observability** - Prometheus metrics and OpenTelemetry traces (exported to Jaeger)
 

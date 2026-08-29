@@ -86,6 +86,12 @@ type Route struct {
 	PathRewritePattern *string `json:"path_rewrite_pattern,omitempty" db:"path_rewrite_pattern"`
 	PathRewriteTarget  *string `json:"path_rewrite_target,omitempty" db:"path_rewrite_target"`
 
+	// Load balancing across the route's origin pool: "weighted" (default,
+	// random biased by each origin's Weight), "round_robin", "least_conn"
+	// (fewest in-flight requests), or "ip_hash" (same client IP sticks to
+	// the same origin).
+	LoadBalancing string `json:"load_balancing" db:"load_balancing"`
+
 	// Advanced
 	TimeoutSeconds          int  `json:"timeout_seconds" db:"timeout_seconds"`
 	RetryAttempts           int  `json:"retry_attempts" db:"retry_attempts"`

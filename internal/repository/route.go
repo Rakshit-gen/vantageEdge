@@ -38,14 +38,14 @@ func (r *routeRepository) Create(ctx context.Context, route *models.Route) error
 	query := `INSERT INTO routes (tenant_id, origin_id, name, path_pattern, methods, priority, auth_mode,
 	          rate_limit_enabled, rate_limit_requests_per_second, rate_limit_burst, rate_limit_key_strategy,
 	          cache_enabled, cache_ttl_seconds, cache_key_pattern, cache_bypass_rules,
-	          request_headers, response_headers, timeout_seconds, retry_attempts, metadata)
-	          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
+	          request_headers, response_headers, timeout_seconds, retry_attempts, load_balancing, metadata)
+	          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
 	          RETURNING id, created_at, updated_at`
 	if err := tx.QueryRowxContext(ctx, query,
 		route.TenantID, route.OriginID, route.Name, route.PathPattern, route.Methods, route.Priority, route.AuthMode,
 		route.RateLimitEnabled, route.RateLimitRequestsPerSecond, route.RateLimitBurst, route.RateLimitKeyStrategy,
 		route.CacheEnabled, route.CacheTTLSeconds, route.CacheKeyPattern, route.CacheBypassRules,
-		route.RequestHeaders, route.ResponseHeaders, route.TimeoutSeconds, route.RetryAttempts, route.Metadata).
+		route.RequestHeaders, route.ResponseHeaders, route.TimeoutSeconds, route.RetryAttempts, route.LoadBalancing, route.Metadata).
 		Scan(&route.ID, &route.CreatedAt, &route.UpdatedAt); err != nil {
 		return err
 	}
@@ -87,14 +87,14 @@ func (r *routeRepository) Update(ctx context.Context, route *models.Route) error
 	          auth_mode = $5, is_active = $6, rate_limit_enabled = $7,
 	          rate_limit_requests_per_second = $8, rate_limit_burst = $9, rate_limit_key_strategy = $10,
 	          cache_enabled = $11, cache_ttl_seconds = $12, cache_key_pattern = $13,
-	          timeout_seconds = $14, retry_attempts = $15
-	          WHERE id = $16`
+	          timeout_seconds = $14, retry_attempts = $15, load_balancing = $16
+	          WHERE id = $17`
 	_, err := r.db.ExecContext(ctx, query,
 		route.Name, route.PathPattern, route.Methods, route.Priority,
 		route.AuthMode, route.IsActive, route.RateLimitEnabled,
 		route.RateLimitRequestsPerSecond, route.RateLimitBurst, route.RateLimitKeyStrategy,
 		route.CacheEnabled, route.CacheTTLSeconds, route.CacheKeyPattern,
-		route.TimeoutSeconds, route.RetryAttempts, route.ID)
+		route.TimeoutSeconds, route.RetryAttempts, route.LoadBalancing, route.ID)
 	return err
 }
 
