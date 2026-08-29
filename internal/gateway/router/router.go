@@ -275,7 +275,7 @@ func (g *Gateway) proxyToOrigin(w http.ResponseWriter, r *http.Request, route *m
 			continue
 		}
 
-		if cacheable && resp.StatusCode == http.StatusOK {
+		if cacheable && resp.StatusCode == http.StatusOK && cacheableResponse(resp) {
 			g.writeAndCacheResponse(w, resp, route, cacheKey)
 		} else {
 			g.proxy.WriteResponse(w, resp)
@@ -295,26 +295,52 @@ func (g *Gateway) proxyToOrigin(w http.ResponseWriter, r *http.Request, route *m
 }
 
 func (g *Gateway) writeAndCacheResponse(w http.ResponseWriter, resp *http.Response, route *models.Route, cacheKey string) {
-	body, err := readAndRestoreBody(resp)
-	if err != nil {
-		g.logger.Warn().Err(err).Msg("Failed to buffer response body for caching")
+	// Read at most one byte past the cache cap. A body larger than that (or
+	// an unbounded one that slipped past cacheableResponse) is not cached
+	// and is streamed through in full — buffered prefix plus the rest of
+	// the wire — so it can never be pulled entirely into memory.
+	prefix, err := io.ReadAll(io.LimitReader(resp.Body, maxCacheableBodyBytes+1))
+	if err != nil || len(prefix) > maxCacheableBodyBytes {
+		if err != nil {
+			g.logger.Warn().Err(err).Msg("Failed to buffer response body for caching")
+		}
+		resp.Body = struct {
+			io.Reader
+			io.Closer
+		}{io.MultiReader(bytes.NewReader(prefix), resp.Body), resp.Body}
 		g.proxy.WriteResponse(w, resp)
 		return
 	}
+	resp.Body.Close()
+	resp.Body = io.NopCloser(bytes.NewReader(prefix))
 
-	if len(body) <= maxCacheableBodyBytes {
-		header := make(map[string][]string, len(resp.Header))
-		for k, v := range resp.Header {
-			header[k] = v
-		}
-		g.cache.Set(context.Background(), cacheKey, &middleware.CachedResponse{
-			StatusCode: resp.StatusCode,
-			Header:     header,
-			Body:       body,
-		}, time.Duration(route.CacheTTLSeconds)*time.Second)
+	header := make(map[string][]string, len(resp.Header))
+	for k, v := range resp.Header {
+		header[k] = v
 	}
+	g.cache.Set(context.Background(), cacheKey, &middleware.CachedResponse{
+		StatusCode: resp.StatusCode,
+		Header:     header,
+		Body:       prefix,
+	}, time.Duration(route.CacheTTLSeconds)*time.Second)
 
 	g.proxy.WriteResponse(w, resp)
+}
+
+// cacheableResponse rejects responses that must not be stored or replayed
+// to another caller: anything the origin marked no-store/no-cache/private,
+// anything carrying a Set-Cookie, and event streams (which never end).
+func cacheableResponse(resp *http.Response) bool {
+	if resp.Header.Get("Set-Cookie") != "" {
+		return false
+	}
+	if strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream") {
+		return false
+	}
+	cc := strings.ToLower(resp.Header.Get("Cache-Control"))
+	return !strings.Contains(cc, "no-store") &&
+		!strings.Contains(cc, "no-cache") &&
+		!strings.Contains(cc, "private")
 }
 
 func (g *Gateway) writeCachedResponse(w http.ResponseWriter, cached *middleware.CachedResponse) {
@@ -420,23 +446,6 @@ func (g *Gateway) logRequest(tenantID uuid.UUID, routeID *uuid.UUID, r *http.Req
 // buffer into memory/Redis for caching. Larger responses are still read
 // and forwarded to the client in full; they're just not stored in cache.
 const maxCacheableBodyBytes = 2 << 20 // 2MB
-
-// readAndRestoreBody fully reads resp.Body and replaces it with a fresh
-// reader over the same bytes, so the response can still be streamed to the
-// client after being captured. The caller must forward the full response
-// regardless of size — only caching (not proxying) is gated by
-// maxCacheableBodyBytes, checked separately by the caller.
-func readAndRestoreBody(resp *http.Response) ([]byte, error) {
-	defer resp.Body.Close()
-
-	data, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
-	}
-
-	resp.Body = io.NopCloser(bytes.NewReader(data))
-	return data, nil
-}
 
 func clientIP(r *http.Request) string {
 	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {

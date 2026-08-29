@@ -5,6 +5,29 @@ import (
 	"testing"
 )
 
+func TestCacheableResponse(t *testing.T) {
+	tests := []struct {
+		name   string
+		header http.Header
+		want   bool
+	}{
+		{"plain 200", http.Header{}, true},
+		{"public cache-control", http.Header{"Cache-Control": {"public, max-age=60"}}, true},
+		{"no-store", http.Header{"Cache-Control": {"no-store"}}, false},
+		{"no-cache", http.Header{"Cache-Control": {"no-cache"}}, false},
+		{"private", http.Header{"Cache-Control": {"private, max-age=60"}}, false},
+		{"set-cookie", http.Header{"Set-Cookie": {"session=abc"}}, false},
+		{"event stream", http.Header{"Content-Type": {"text/event-stream"}}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := cacheableResponse(&http.Response{Header: tt.header}); got != tt.want {
+				t.Errorf("cacheableResponse(%v) = %v, want %v", tt.header, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestResolveSubdomain(t *testing.T) {
 	tests := []struct {
 		name    string
