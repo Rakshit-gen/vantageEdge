@@ -145,6 +145,7 @@ curl -X POST http://localhost:8080/api/v1/routes \
     "path_pattern": "/api/users/*",
     "origin_id": "origin_uuid",
     "auth_mode": "jwt_required",
+    "load_balancing": "round_robin",
     "rate_limit_enabled": true,
     "rate_limit_requests_per_second": 100,
     "rate_limit_burst": 200,
@@ -153,6 +154,9 @@ curl -X POST http://localhost:8080/api/v1/routes \
     "cache_key_pattern": "path+query"
   }'
 ```
+
+`load_balancing` is optional (default `weighted`) and controls how the
+route spreads requests across its origin pool — see [Load Balancing](#load-balancing).
 
 #### API Keys
 
@@ -283,11 +287,17 @@ vantageedge-backend/
 - Selective cache bypass rules
 
 ### Load Balancing
-- Round robin distribution
-- Least connections
-- Consistent hashing
-- Health checking
-- Circuit breaking
+Per-route, set via the route's `load_balancing` field, across the origins in
+its pool (`route_origins`). Unhealthy origins are excluded by the health
+checker before selection; a failed attempt fails over to another pool member.
+
+- `weighted` (default) — random, biased by each origin's `weight`. Matches
+  the gateway's original behaviour.
+- `round_robin` — even rotation, with a per-route cursor.
+- `least_conn` — the origin with the fewest in-flight requests right now.
+  Best when request durations are uneven.
+- `ip_hash` — the client IP is hashed to a fixed origin, so a given caller
+  sticks to one backend as long as the pool is unchanged.
 
 ### Observability
 - OpenTelemetry traces
@@ -331,6 +341,7 @@ vantageedge-backend/
 - `origin_id` (UUID, FK)
 - `path_pattern` (String)
 - `auth_mode` (Enum: public, jwt_required, apikey_required)
+- `load_balancing` (String: weighted, round_robin, least_conn, ip_hash)
 - `priority` (Integer)
 - `rate_limit_config` (JSONB)
 - `cache_policy` (JSONB)
