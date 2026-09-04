@@ -159,6 +159,15 @@ func (s *authService) SyncUser(ctx context.Context, req *SyncUserRequest) (*mode
 	}
 
 	if err := s.repos.User.Create(ctx, user); err != nil {
+		// Two concurrent first-ever requests for the same new Clerk user both
+		// pass the "not found" check above and both reach here; clerk_user_id
+		// is unique, so exactly one insert wins. Rather than fail the loser's
+		// request, fetch the winner's user and drop the tenant we speculatively
+		// created for it.
+		if existing, getErr := s.repos.User.GetByClerkID(ctx, req.ClerkUserID); getErr == nil {
+			_ = s.repos.Tenant.Delete(ctx, tenant.ID)
+			return existing, nil
+		}
 		s.logger.Error().Err(err).Str("clerk_user_id", req.ClerkUserID).Msg("Failed to create user during sync")
 		return nil, err
 	}
