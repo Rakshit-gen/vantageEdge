@@ -73,10 +73,13 @@ end
 redis.call("SET", tokens_key, remaining, "EX", ttl)
 redis.call("SET", ts_key, now, "EX", ttl)
 
+-- Returned as a string: a Lua number in a table reply comes back as a RESP
+-- integer (fraction truncated), which would make RetryAfter below overshoot
+-- by up to a full refill tick.
 if allowed then
-  return {1, remaining}
+  return {1, tostring(remaining)}
 else
-  return {0, remaining}
+  return {0, tostring(remaining)}
 end
 `
 
@@ -114,10 +117,10 @@ func (l *RedisLimiter) Allow(ctx context.Context, key string, rps float64, burst
 		return Result{}, fmt.Errorf("unexpected rate limit script result: %v", res)
 	}
 
-	// Redis converts Lua numbers returned in a table reply to RESP integers
-	// (truncating any fraction), so both elements come back as int64.
 	allowedVal := toInt64(arr[0])
-	remaining := toInt64(arr[1])
+	// remaining is returned as a Lua string (see the script) specifically to
+	// preserve its fractional part across the RESP boundary.
+	remaining := toFloat64(arr[1])
 
 	allowed := allowedVal == 1
 	result := Result{
@@ -125,7 +128,7 @@ func (l *RedisLimiter) Allow(ctx context.Context, key string, rps float64, burst
 		Remaining: int(remaining),
 	}
 	if !allowed {
-		deficit := 1.0 - float64(remaining)
+		deficit := 1.0 - remaining
 		if deficit < 0 {
 			deficit = 0
 		}
@@ -143,6 +146,23 @@ func toInt64(v interface{}) int64 {
 	default:
 		var parsed int64
 		fmt.Sscanf(fmt.Sprintf("%v", v), "%d", &parsed)
+		return parsed
+	}
+}
+
+func toFloat64(v interface{}) float64 {
+	switch n := v.(type) {
+	case string:
+		var parsed float64
+		fmt.Sscanf(n, "%g", &parsed)
+		return parsed
+	case float64:
+		return n
+	case int64:
+		return float64(n)
+	default:
+		var parsed float64
+		fmt.Sscanf(fmt.Sprintf("%v", v), "%g", &parsed)
 		return parsed
 	}
 }
