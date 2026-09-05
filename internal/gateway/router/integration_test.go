@@ -117,7 +117,7 @@ func newTestHarness(t *testing.T) *testHarness {
 	if err != nil {
 		t.Fatalf("failed to build JWT validator: %v", err)
 	}
-	authenticator := middleware.NewAuthenticator(jwtValidator, apikey.NewValidator(repos))
+	authenticator := middleware.NewAuthenticator(jwtValidator, apikey.NewValidator(repos), repos.User)
 
 	// The gateway no longer reads route/origin config from Postgres
 	// directly — it calls the control plane's gRPC ConfigService, so the

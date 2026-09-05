@@ -19,6 +19,7 @@ import (
 	"github.com/vantageedge/backend/internal/auth/apikey"
 	authjwt "github.com/vantageedge/backend/internal/auth/jwt"
 	"github.com/vantageedge/backend/internal/models"
+	"github.com/vantageedge/backend/internal/repository"
 )
 
 // Identity describes who (if anyone) authenticated the current request.
@@ -49,10 +50,11 @@ func (id Identity) CacheIdentityKey() string {
 type Authenticator struct {
 	jwtValidator *authjwt.JWTValidator
 	apiKeys      *apikey.Validator
+	users        repository.UserRepository
 }
 
-func NewAuthenticator(jwtValidator *authjwt.JWTValidator, apiKeys *apikey.Validator) *Authenticator {
-	return &Authenticator{jwtValidator: jwtValidator, apiKeys: apiKeys}
+func NewAuthenticator(jwtValidator *authjwt.JWTValidator, apiKeys *apikey.Validator, users repository.UserRepository) *Authenticator {
+	return &Authenticator{jwtValidator: jwtValidator, apiKeys: apiKeys, users: users}
 }
 
 // Authenticate enforces route.AuthMode ("public", "jwt_required",
@@ -67,13 +69,13 @@ func (a *Authenticator) Authenticate(ctx context.Context, r *http.Request, route
 		return &Identity{Method: "public", TenantID: tenantID}, nil
 
 	case "jwt_required":
-		return a.authenticateJWT(r, tenantID)
+		return a.authenticateJWT(ctx, r, tenantID)
 
 	case "apikey_required":
 		return a.authenticateAPIKey(ctx, r, tenantID)
 
 	case "both":
-		if id, err := a.authenticateJWT(r, tenantID); err == nil {
+		if id, err := a.authenticateJWT(ctx, r, tenantID); err == nil {
 			return id, nil
 		}
 		return a.authenticateAPIKey(ctx, r, tenantID)
@@ -83,7 +85,7 @@ func (a *Authenticator) Authenticate(ctx context.Context, r *http.Request, route
 	}
 }
 
-func (a *Authenticator) authenticateJWT(r *http.Request, tenantID uuid.UUID) (*Identity, error) {
+func (a *Authenticator) authenticateJWT(ctx context.Context, r *http.Request, tenantID uuid.UUID) (*Identity, error) {
 	authHeader := r.Header.Get("Authorization")
 	if authHeader == "" {
 		return nil, fmt.Errorf("missing authorization header")
@@ -92,6 +94,18 @@ func (a *Authenticator) authenticateJWT(r *http.Request, tenantID uuid.UUID) (*I
 	claims, err := a.jwtValidator.ValidateToken(authHeader)
 	if err != nil {
 		return nil, fmt.Errorf("invalid token: %w", err)
+	}
+
+	// A verified token only proves Clerk issued it, not that its holder
+	// belongs to the tenant this request was routed to — look the Clerk
+	// user up and reject a mismatch, the same cross-tenant check
+	// authenticateAPIKey already does for API keys.
+	user, err := a.users.GetByClerkID(ctx, claims.ClerkUserID)
+	if err != nil {
+		return nil, fmt.Errorf("unknown clerk user")
+	}
+	if user.TenantID != tenantID {
+		return nil, fmt.Errorf("token does not belong to this tenant")
 	}
 
 	return &Identity{

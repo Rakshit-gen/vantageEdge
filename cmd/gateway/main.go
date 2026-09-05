@@ -67,7 +67,7 @@ func main() {
 		log.Fatal().Err(err).Msg("Failed to initialize JWT validator from Clerk JWKS")
 	}
 	apiKeyValidator := apikey.NewValidator(repos)
-	authenticator := middleware.NewAuthenticator(jwtValidator, apiKeyValidator)
+	authenticator := middleware.NewAuthenticator(jwtValidator, apiKeyValidator, repos.User)
 
 	// Redis backs both rate limiting and caching in production: it's the
 	// only way multiple gateway replicas share limiter/cache state. If it's
