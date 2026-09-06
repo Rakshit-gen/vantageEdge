@@ -47,12 +47,24 @@ type ConfigCache struct {
 
 	mu             sync.RWMutex
 	bySubdomain    map[string]configCacheEntry
-	subdomainByTID map[string]string // tenantID string -> subdomain, for invalidation lookups
+	subdomainByTID map[string]string    // tenantID string -> subdomain, for invalidation lookups
+	inflight       map[string]*cfgFetch // subdomain -> in-progress fetch, for single-flighting
 }
 
 type configCacheEntry struct {
 	config    *tenantConfig
 	expiresAt time.Time
+}
+
+// cfgFetch collapses concurrent refetches of the same subdomain into one
+// upstream call: without it, every in-flight request for a tenant fires
+// its own source.Fetch the instant the TTL lapses (a thundering herd of
+// identical RPCs against the control plane, once per TTL, scaling with
+// request rate).
+type cfgFetch struct {
+	done chan struct{}
+	cfg  *tenantConfig
+	err  error
 }
 
 func NewConfigCache(source ConfigSource, ttl time.Duration) *ConfigCache {
@@ -64,6 +76,7 @@ func NewConfigCache(source ConfigSource, ttl time.Duration) *ConfigCache {
 		ttl:            ttl,
 		bySubdomain:    make(map[string]configCacheEntry),
 		subdomainByTID: make(map[string]string),
+		inflight:       make(map[string]*cfgFetch),
 	}
 }
 
@@ -88,17 +101,63 @@ func (c *ConfigCache) get(ctx context.Context, subdomain string) (*tenantConfig,
 		return entry.config, nil
 	}
 
-	cfg, err := c.source.Fetch(ctx, subdomain)
-	if err != nil {
-		return nil, err
-	}
-
 	c.mu.Lock()
-	c.bySubdomain[subdomain] = configCacheEntry{config: cfg, expiresAt: time.Now().Add(c.ttl)}
-	c.subdomainByTID[cfg.tenantID.String()] = subdomain
+	// Re-check under the write lock: another goroutine may have refreshed
+	// while we waited for it.
+	if entry, ok := c.bySubdomain[subdomain]; ok && time.Now().Before(entry.expiresAt) {
+		c.mu.Unlock()
+		return entry.config, nil
+	}
+	if fl, ok := c.inflight[subdomain]; ok {
+		// A refetch for this subdomain is already running — wait for it
+		// instead of starting a second one.
+		c.mu.Unlock()
+		select {
+		case <-fl.done:
+			return c.resultOrStale(subdomain, fl)
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	fl := &cfgFetch{done: make(chan struct{})}
+	c.inflight[subdomain] = fl
 	c.mu.Unlock()
 
-	return cfg, nil
+	// Detach from this one request's context: the shared fetch must not be
+	// cancelled just because the caller that happened to start it went
+	// away. Other waiters still honour their own ctx above.
+	fetchCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	cfg, err := c.source.Fetch(fetchCtx, subdomain)
+	cancel()
+
+	c.mu.Lock()
+	delete(c.inflight, subdomain)
+	if err == nil {
+		c.bySubdomain[subdomain] = configCacheEntry{config: cfg, expiresAt: time.Now().Add(c.ttl)}
+		c.subdomainByTID[cfg.tenantID.String()] = subdomain
+	}
+	c.mu.Unlock()
+
+	fl.cfg, fl.err = cfg, err
+	close(fl.done)
+
+	return c.resultOrStale(subdomain, fl)
+}
+
+// resultOrStale returns a completed fetch's result, falling back to a
+// still-cached (expired) entry when the refetch failed — a control-plane
+// blip should briefly serve stale config, not 5xx a tenant's traffic.
+func (c *ConfigCache) resultOrStale(subdomain string, fl *cfgFetch) (*tenantConfig, error) {
+	if fl.err == nil {
+		return fl.cfg, nil
+	}
+	c.mu.RLock()
+	entry, ok := c.bySubdomain[subdomain]
+	c.mu.RUnlock()
+	if ok {
+		return entry.config, nil
+	}
+	return nil, fl.err
 }
 
 // Match resolves subdomain to a tenant, then returns the highest-priority

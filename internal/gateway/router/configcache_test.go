@@ -2,7 +2,9 @@ package router
 
 import (
 	"context"
+	"errors"
 	"net"
+	"sync"
 	"testing"
 	"time"
 
@@ -137,6 +139,71 @@ func TestConfigCache_NoMatchingRoute(t *testing.T) {
 	_, _, _, err := cache.Match(context.Background(), "acme", "/somewhere/else", "GET")
 	if err != ErrNoMatchingRoute {
 		t.Fatalf("expected ErrNoMatchingRoute, got %v", err)
+	}
+}
+
+// countingSource is a ConfigSource that records how many times Fetch was
+// called, with an optional delay and error, for exercising ConfigCache's
+// single-flight and stale-fallback behaviour without a gRPC server.
+type countingSource struct {
+	mu    sync.Mutex
+	calls int
+	delay time.Duration
+	err   error
+	cfg   *tenantConfig
+}
+
+func (s *countingSource) Fetch(_ context.Context, _ string) (*tenantConfig, error) {
+	s.mu.Lock()
+	s.calls++
+	s.mu.Unlock()
+	if s.delay > 0 {
+		time.Sleep(s.delay)
+	}
+	if s.err != nil {
+		return nil, s.err
+	}
+	return s.cfg, nil
+}
+
+func TestConfigCache_SingleFlightsConcurrentRefetch(t *testing.T) {
+	src := &countingSource{delay: 50 * time.Millisecond, cfg: &tenantConfig{tenantID: uuid.New(), status: "active"}}
+	c := NewConfigCache(src, time.Minute)
+
+	var wg sync.WaitGroup
+	for i := 0; i < 50; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := c.get(context.Background(), "acme"); err != nil {
+				t.Errorf("get: %v", err)
+			}
+		}()
+	}
+	wg.Wait()
+
+	if src.calls != 1 {
+		t.Fatalf("expected 50 concurrent refetches to collapse into 1 upstream call, got %d", src.calls)
+	}
+}
+
+func TestConfigCache_ServesStaleWhenRefetchFails(t *testing.T) {
+	good := &tenantConfig{tenantID: uuid.New(), status: "active"}
+	src := &countingSource{cfg: good}
+	c := NewConfigCache(src, 10*time.Millisecond)
+
+	if _, err := c.get(context.Background(), "acme"); err != nil {
+		t.Fatalf("first fetch: %v", err)
+	}
+	time.Sleep(20 * time.Millisecond) // let the cached entry expire
+	src.err = errors.New("control plane unreachable")
+
+	got, err := c.get(context.Background(), "acme")
+	if err != nil {
+		t.Fatalf("expected the expired-but-cached config to be served on refetch failure, got error: %v", err)
+	}
+	if got != good {
+		t.Fatal("expected the previously-cached config, got a different value")
 	}
 }
 
