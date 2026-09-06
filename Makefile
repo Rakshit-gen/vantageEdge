@@ -117,12 +117,8 @@ proto-gen: ## Regenerate gRPC code from api/proto/*.proto (requires protoc, prot
 openapi-gen: ## Generate OpenAPI documentation
 	swag init -g cmd/control-plane/main.go -o api/openapi
 
-load-test: ## Run load tests (requires hey tool)
-	@if ! command -v hey &> /dev/null; then \
-		echo "Installing hey..."; \
-		go install github.com/rakyll/hey@latest; \
-	fi
-	hey -n 10000 -c 100 -m GET http://localhost:8000/health
+load-test: ## Load-test the full gateway pipeline (needs Postgres + Redis)
+	$(GOCMD) run ./cmd/loadtest -conns 64 -duration 20s
 
 benchmark: ## Run Go benchmarks
 	$(GOTEST) -bench=. -benchmem ./...

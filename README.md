@@ -309,6 +309,39 @@ checker before selection; a failed attempt fails over to another pool member.
   - Error rates by status code
   - Active connections
 
+## Performance
+
+Measured with `cmd/loadtest` (`make load-test`), which drives the full
+request pipeline — tenant resolution → route match → auth → rate limit →
+cache → proxy — through the real gateway HTTP server, a real gRPC
+`ConfigService` with push invalidation, and Redis-backed rate limiting and
+caching, against local PostgreSQL and Redis. Single gateway process; the
+load generator, gateway, mock origin, Postgres and Redis all share one
+10-core machine, so these are lower bounds rather than headline hardware
+numbers. Medians of 3 runs, 64 connections, closed loop.
+
+| Path | Throughput | p50 | p90 | p99 |
+|------|-----------:|----:|----:|----:|
+| Passthrough proxy (no rate limit, no cache)      | ~70k req/s  | 0.8 ms | 1.4 ms | 2.7 ms |
+| Response cache hit (served from Redis)           | ~37k req/s  | 1.7 ms | 2.1 ms | 2.7 ms |
+| Per-route rate limiting (Redis token bucket)     | ~16k req/s  | 3.7 ms | 5.1 ms | 7.3 ms |
+| Origin direct — gateway bypassed (baseline)      | ~170k req/s | 0.3 ms | 0.6 ms | 1.2 ms |
+
+- **Gateway overhead over a direct origin call: +0.5 ms p50, +0.7 ms p90, +1.5 ms p99.**
+- **Config propagation** — operator changes a route or origin → gateway
+  serves the new config, via `StreamConfigUpdates` push invalidation rather
+  than the 5 s TTL fallback: **p50 ~2 ms, worst case <3.1 ms.**
+- The rate-limited path is bounded by Redis round-trips (the token-bucket Lua
+  script runs 4 Redis ops per request), not by the gateway; the cache-hit
+  path costs one Redis `GET` and, in this setup, the in-process mock origin
+  is faster than that round-trip — a real network origin makes the cache-hit
+  path the clear win.
+
+```bash
+docker compose up -d postgres redis
+DB_HOST=localhost DB_PASSWORD=$DB_PASSWORD make load-test
+```
+
 ## Database Schema
 
 ### Tenants
@@ -368,7 +401,7 @@ make test-coverage
 # Run integration tests
 make test-integration
 
-# Load testing
+# Load-test the full gateway pipeline (needs Postgres + Redis) — see Performance
 make load-test
 ```
 
