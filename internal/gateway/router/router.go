@@ -22,6 +22,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -56,6 +57,16 @@ type Gateway struct {
 	proxy         *proxy.ReverseProxy
 	metrics       *observability.Metrics
 	healthChecker *loadbalancer.HealthChecker
+
+	// logSem bounds how many request-log writes can be in flight at once.
+	// Without it a traffic spike spawns one goroutine per request against
+	// a fixed-size DB pool: tens of thousands of goroutines pile up waiting
+	// for a connection, and the contention starves the pool for everything
+	// else that shares it. Past the cap, log writes are dropped (counted in
+	// logsDropped) rather than queued — an analytics gap is survivable,
+	// unbounded goroutine growth on the serving path is not.
+	logSem      chan struct{}
+	logsDropped atomic.Int64
 }
 
 // Deps bundles everything the gateway needs beyond config/repos/logger, so
@@ -82,6 +93,7 @@ func New(cfg *config.Config, repos *repository.Repository, deps Deps, log *logge
 		proxy:         deps.Proxy,
 		metrics:       deps.Metrics,
 		healthChecker: deps.HealthChecker,
+		logSem:        make(chan struct{}, 256),
 	}
 
 	mux := http.NewServeMux()
@@ -421,8 +433,18 @@ func subdomainFromHost(host string) (string, error) {
 
 func (g *Gateway) logRequest(tenantID uuid.UUID, routeID *uuid.UUID, r *http.Request, statusCode int, duration time.Duration, cacheHit, rateLimited bool, authMethod string) {
 	// Fire-and-forget on a bounded timeout: request logging must never add
-	// latency to (or fail) the request it's describing.
+	// latency to (or fail) the request it's describing. logSem caps the
+	// number of these in flight — past the cap the write is dropped, not
+	// queued (see the field comment).
+	select {
+	case g.logSem <- struct{}{}:
+	default:
+		g.logsDropped.Add(1)
+		return
+	}
 	go func() {
+		defer func() { <-g.logSem }()
+
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
 
